@@ -8,7 +8,6 @@ import {
   Search,
   ChevronRight,
   AlertTriangle,
-  UploadCloud,
   FileSpreadsheet,
   RefreshCw,
   TrendingUp,
@@ -27,9 +26,7 @@ import {
   ResponsiveContainer,
   ScatterChart,
   Scatter,
-  Legend,
-  LineChart,
-  Line
+  Legend
 } from 'recharts';
 
 // --- 模擬數據 (基於您的 113 學年度分析結果) ---
