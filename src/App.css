@@ -1,0 +1,13 @@
+/* 修正錯誤：
+  之前的錯誤是因為誤將 React (JS/TS) 程式碼貼到了這個 CSS 檔案中。
+
+  因為我們主要使用 Tailwind CSS 進行排版，
+  所以這個檔案通常可以保持為空，或是只放置少量的自定義 CSS。
+*/
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 如果您沒有在 index.css 引入 Tailwind，請保留上方三行。
+   如果 index.css 已經有了，這裡可以留白。 */
