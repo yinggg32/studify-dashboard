@@ -21,7 +21,8 @@ import {
   Trash2,
   Info,
   Loader2,
-  Tag
+  Tag,
+  ShieldCheck // 新增盾牌圖示代表保護機制
 } from 'lucide-react';
 import {
   BarChart,
@@ -66,20 +67,24 @@ const parseTime = (val: any) => {
   return 0;
 };
 
-// --- AI 標籤演算法 (已更新：退步 > 10 分才標記) ---
+// --- AI 標籤演算法 (已加入天花板效應保護) ---
 const getSmartTag = (pre: number, post: number, minutes: number): StudentTag => {
   const improvement = post - pre;
 
-  // 1. 優先判斷：成績大幅退步 (退步超過 10 分) -> 需關懷
+  // 1. [優先] 需關懷：不及格 或 大幅退步
+  if (post < 60) return '需關懷';
   if (improvement < -10) return '需關懷';
 
-  // 2. 次要判斷：不及格 -> 需關懷
-  if (post < 60) return '需關懷';
+  // 2. [天花板效應保護機制]
+  // 邏輯：前測 >= 85 分的學生，進步空間受限，只要沒大退步，都視為表現優異(穩定)。
+  // 避免 92分->95分 被誤判為無效學習。
+  if (pre >= 85) return '穩定';
 
-  // 3. 無效學習：花很多時間 (>60分) 但進步微小 (<=5分)
+  // 3. 無效學習：投入高時間 (>60) 但進步微小 (<=5)
+  // (此時已排除高分群，所以針對的是中低分群卻進步慢的學生)
   if (minutes > 60 && improvement <= 5) return '無效學習';
 
-  // 4. 潛力股：花很少時間 (<30分) 但進步顯著 (>=10分)
+  // 4. 潛力股：投入低時間 (<30) 但進步顯著 (>=10)
   if (minutes < 30 && improvement >= 10) return '潛力股';
 
   return '穩定';
@@ -87,10 +92,10 @@ const getSmartTag = (pre: number, post: number, minutes: number): StudentTag => 
 
 // 標籤顏色
 const TAG_STYLES = {
-  '無效學習': 'bg-rose-100 text-rose-700 border-rose-200', // 紅色警示
-  '潛力股': 'bg-emerald-100 text-emerald-700 border-emerald-200', // 綠色優良
-  '需關懷': 'bg-amber-100 text-amber-700 border-amber-200', // 黃色注意
-  '穩定': 'bg-slate-100 text-slate-500 border-slate-200', // 灰色普通
+  '無效學習': 'bg-rose-100 text-rose-700 border-rose-200',
+  '潛力股': 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  '需關懷': 'bg-amber-100 text-amber-700 border-amber-200',
+  '穩定': 'bg-slate-100 text-slate-500 border-slate-200',
 };
 
 // 處理匯入資料
@@ -266,7 +271,7 @@ export default function StudifyPlatform() {
         if (processed.length > 0) {
           setRawData(processed);
           setIsUsingMock(false);
-          alert(`成功載入 ${processed.length} 筆資料！AI 已完成自動診斷。`);
+          alert(`成功載入 ${processed.length} 筆資料！AI 已完成自動診斷 (包含天花板效應校正)。`);
         } else {
           alert('讀取失敗，無有效資料。');
         }
@@ -405,13 +410,18 @@ export default function StudifyPlatform() {
               <div className="p-4 bg-blue-50 rounded-xl border border-blue-100 mb-6">
                 <h4 className="font-bold text-blue-900 flex items-center gap-2 mb-2">
                   <Tag size={18} />
-                  AI 分群規則說明
+                  AI 分群規則說明 (v1.2 Updated)
                 </h4>
-                <ul className="text-sm text-blue-700 space-y-1 list-disc list-inside">
-                  <li><span className="font-bold">需關懷</span>：成績大幅退步 (退步 &gt; 10 分) 或 不及格</li>
-                  <li><span className="font-bold">無效學習</span>：使用 &gt; 60 分鐘但成績無進步 (≤ 5)</li>
-                  <li><span className="font-bold">潛力股</span>：使用 &lt; 30 分鐘且進步顯著 (≥ 10)</li>
-                  <li><span className="font-bold">穩定發展</span>：其他情況</li>
+                <ul className="text-sm text-blue-700 space-y-2 list-disc list-inside">
+                  <li><span className="font-bold text-rose-600">需關懷</span>：後測不及格 (&lt; 60 分) 或 成績大幅退步 (&lt; -10 分)。</li>
+                  <li>
+                    <span className="font-bold text-slate-600 flex items-center gap-1 inline-flex">
+                      <ShieldCheck size={14} /> 高分保護機制
+                    </span>：
+                    前測 ≥ 85 分者，受天花板效應影響進步受限，自動判定為穩定，豁免無效學習標籤。
+                  </li>
+                  <li><span className="font-bold text-rose-600">無效學習</span>：使用 &gt; 60 分鐘但成績無顯著進步 (≤ 5 分)。</li>
+                  <li><span className="font-bold text-emerald-600">潛力股</span>：使用 &lt; 30 分鐘且進步顯著 (≥ 10 分)。</li>
                 </ul>
               </div>
               <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">
