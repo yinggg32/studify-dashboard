@@ -160,35 +160,55 @@ export default function StudifyPlatform() {
     return { scatter, bar };
   }, [filteredData]);
 
-  // --- 檔案上傳處理 ---
+  // --- 檔案上傳處理 (增強版) ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      Papa.parse(file, {
-        header: true,
-        complete: (results) => {
-          // 轉換 CSV 欄位名稱並過濾無效資料
-          const parsedData = results.data
-            .filter((row: any) => row['前測成績'] && row['後測成績']) // 確保有成績
-            .map((row: any) => ({
-              學校名稱: row['學校名稱'] || '未知學校',
-              年級: row['年級'] || '未知',
-              科目: row['本表單施測科目領域'] || '一般', // 對應您的 CSV
-              前測成績: parseFloat(row['前測成績']),
-              後測成績: parseFloat(row['後測成績']),
-              前後側差異: parseFloat(row['後測成績']) - parseFloat(row['前測成績']),
-              使用總時數: row['使用總時數'] || '00:00:00',
-              任務完成: parseInt(row['任務完成'] || '0'),
-              練習題測驗: parseInt(row['練習題測驗'] || '0'),
-              姓名: row['實施教師姓名'] ? `學生(${row['實施教師姓名']}班)` : '學生'
-            }));
+    if (!file) return;
 
-          setRawData(parsedData);
-          setIsUsingMock(false);
-          alert(`成功載入 ${parsedData.length} 筆學生資料！`);
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true, // 跳過空行
+      complete: (results) => {
+        // Debug: 如果是亂碼，fields 會是亂碼
+        console.log("偵測到的欄位:", results.meta.fields);
+
+        const parsedData = results.data
+          .filter((row: any) => {
+             // 檢查關鍵欄位是否存在 (兼容亂碼或 BOM 的情況，這裡先檢查值)
+             const hasPreScore = row['前測成績'] !== undefined && row['前測成績'] !== '';
+             const hasPostScore = row['後測成績'] !== undefined && row['後測成績'] !== '';
+             return hasPreScore && hasPostScore;
+          })
+          .map((row: any) => ({
+            學校名稱: row['學校名稱'] || '未知學校',
+            // 兼容您 CSV 的特定欄位名稱
+            年級: row['年級'] || row['本測驗實施年級'] || '未知',
+            科目: row['科目'] || row['本表單施測科目領域'] || '一般',
+            前測成績: parseFloat(row['前測成績']),
+            後測成績: parseFloat(row['後測成績']),
+            前後側差異: parseFloat(row['後測成績']) - parseFloat(row['前測成績']),
+            使用總時數: row['使用總時數'] || '00:00:00',
+            任務完成: parseInt(row['任務完成'] || '0'),
+            練習題測驗: parseInt(row['練習題測驗'] || '0'),
+            姓名: row['實施教師姓名'] ? `學生(${row['實施教師姓名']}班)` :
+                  row['姓名'] ? row['姓名'] : '學生'
+          }));
+
+        if (parsedData.length === 0) {
+           alert("讀取失敗：沒有找到有效的資料。\n\n可能原因：\n1. 檔案編碼不是 UTF-8 (請另存為 UTF-8 CSV)\n2. 找不到「前測成績」與「後測成績」欄位");
+        } else {
+           setRawData(parsedData);
+           setIsUsingMock(false);
+           alert(`成功載入 ${parsedData.length} 筆學生資料！`);
         }
-      });
-    }
+
+        // 重置 input value 以便重複上傳同一個檔案
+        e.target.value = '';
+      },
+      error: (error) => {
+         alert(`解析錯誤: ${error.message}`);
+      }
+    });
   };
 
   return (
