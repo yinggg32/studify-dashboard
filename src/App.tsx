@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import html2canvas from 'html2canvas'; // 用於截圖
-import jsPDF from 'jspdf'; // 用於產生 PDF
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
 import {
   LayoutDashboard,
   Users,
@@ -20,7 +20,8 @@ import {
   Settings,
   Trash2,
   Info,
-  Loader2 // 載入動畫
+  Loader2,
+  Tag // 新增 Tag 圖示
 } from 'lucide-react';
 import {
   BarChart,
@@ -35,6 +36,8 @@ import {
 } from 'recharts';
 
 // --- 型別定義 ---
+type StudentTag = '無效學習' | '潛力股' | '需關懷' | '穩定';
+
 interface StudentData {
   學校名稱: string;
   年級: string;
@@ -46,16 +49,13 @@ interface StudentData {
   練習題測驗: number;
   前後側差異: number;
   姓名?: string;
+  tag?: StudentTag; // 新增標籤欄位
 }
 
 // --- 輔助函數 ---
 const parseTime = (val: any) => {
   if (!val) return 0;
-  // 1. 處理 Excel 數值時間 (例如 0.5 代表 12:00)
-  if (typeof val === 'number') {
-    return Math.round(val * 24 * 60);
-  }
-  // 2. 處理字串時間 "HH:MM:SS"
+  if (typeof val === 'number') return Math.round(val * 24 * 60);
   const timeStr = String(val).trim();
   const parts = timeStr.split(':');
   if (parts.length >= 2) {
@@ -66,34 +66,63 @@ const parseTime = (val: any) => {
   return 0;
 };
 
+// --- AI 標籤演算法 (核心邏輯) ---
+const getSmartTag = (pre: number, post: number, minutes: number): StudentTag => {
+  const improvement = post - pre;
+
+  if (post < 60) return '需關懷'; // 不及格優先標記
+  if (minutes > 60 && improvement <= 0) return '無效學習'; // 時間長卻沒進步
+  if (minutes < 30 && improvement >= 10) return '潛力股'; // 時間短但進步快
+  return '穩定';
+};
+
+// 標籤顏色設定
+const TAG_STYLES = {
+  '無效學習': 'bg-rose-100 text-rose-700 border-rose-200',
+  '潛力股': 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  '需關懷': 'bg-amber-100 text-amber-700 border-amber-200',
+  '穩定': 'bg-slate-100 text-slate-600 border-slate-200',
+};
+
 // 處理匯入資料
-const processImportedData = (jsonData: any[]) => {
+const processImportedData = (jsonData: any[]): StudentData[] => {
   return jsonData
     .filter((row: any) => {
-       // 寬鬆檢查：只要有前後測成績 (不管欄位名稱是中文還是亂碼，嘗試讀取值)
        const pre = row['前測成績'] || row['PreScore'];
        const post = row['後測成績'] || row['PostScore'];
        return pre !== undefined && post !== undefined;
     })
-    .map((row: any) => ({
-      學校名稱: row['學校名稱'] || '未知學校',
-      年級: row['年級'] || row['本測驗實施年級'] || '未知',
-      科目: row['科目'] || row['本表單施測科目領域'] || '一般',
-      前測成績: parseFloat(row['前測成績']),
-      後測成績: parseFloat(row['後測成績']),
-      前後側差異: parseFloat(row['後測成績']) - parseFloat(row['前測成績']),
-      使用總時數: row['使用總時數'] || '00:00:00',
-      任務完成: parseInt(row['任務完成'] || '0'),
-      練習題測驗: parseInt(row['練習題測驗'] || '0'),
-      姓名: row['實施教師姓名'] ? `學生(${row['實施教師姓名']}班)` :
-            row['姓名'] ? row['姓名'] : '學生'
-    }));
+    .map((row: any) => {
+      const pre = parseFloat(row['前測成績']);
+      const post = parseFloat(row['後測成績']);
+      const timeStr = row['使用總時數'] || '00:00:00';
+      const minutes = parseTime(timeStr);
+
+      return {
+        學校名稱: row['學校名稱'] || '未知學校',
+        年級: row['年級'] || row['本測驗實施年級'] || '未知',
+        科目: row['科目'] || row['本表單施測科目領域'] || '一般',
+        前測成績: pre,
+        後測成績: post,
+        前後側差異: post - pre,
+        使用總時數: timeStr,
+        任務完成: parseInt(row['任務完成'] || '0'),
+        練習題測驗: parseInt(row['練習題測驗'] || '0'),
+        姓名: row['實施教師姓名'] ? `學生(${row['實施教師姓名']}班)` : row['姓名'] ? row['姓名'] : '學生',
+        tag: getSmartTag(pre, post, minutes) // 自動打標籤
+      };
+    });
 };
 
 // 預設範例資料
 const MOCK_DATA: StudentData[] = Array.from({ length: 100 }, (_, i) => {
-  const pre = Math.floor(Math.random() * 40) + 40;
-  const post = Math.min(100, pre + Math.floor(Math.random() * 30));
+  const pre = Math.floor(Math.random() * 40) + 40; // 40-80
+  const post = Math.min(100, pre + Math.floor(Math.random() * 40) - 10); // -10 到 +30
+  const hours = Math.floor(Math.random() * 2);
+  const mins = Math.floor(Math.random() * 60);
+  const timeStr = `${hours}:${mins}:00`;
+  const totalMins = hours * 60 + mins;
+
   return {
     學校名稱: i % 3 === 0 ? '恆春國小' : i % 3 === 1 ? '車城國小' : '滿州國中',
     年級: i % 2 === 0 ? '五年級' : '六年級',
@@ -101,10 +130,11 @@ const MOCK_DATA: StudentData[] = Array.from({ length: 100 }, (_, i) => {
     前測成績: pre,
     後測成績: post,
     前後側差異: post - pre,
-    使用總時數: `${Math.floor(Math.random() * 50)}:${Math.floor(Math.random() * 60)}:00`,
+    使用總時數: timeStr,
     任務完成: Math.floor(Math.random() * 20),
     練習題測驗: Math.floor(Math.random() * 50),
-    姓名: `學生${i + 1}`
+    姓名: `學生${i + 1}`,
+    tag: getSmartTag(pre, post, totalMins)
   };
 });
 
@@ -122,7 +152,7 @@ const StatCard = ({ title, value, subtext, icon: Icon, colorClass }: any) => (
       </div>
     </div>
     <div className="mt-4 flex items-center text-sm">
-      <span className="text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full">
+      <span className="text-slate-500 font-medium bg-slate-50 px-2 py-0.5 rounded-full text-xs">
         {subtext}
       </span>
     </div>
@@ -134,7 +164,7 @@ const StatCard = ({ title, value, subtext, icon: Icon, colorClass }: any) => (
 export default function StudifyPlatform() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isExporting, setIsExporting] = useState(false); // 控制匯出狀態
+  const [isExporting, setIsExporting] = useState(false);
 
   const [rawData, setRawData] = useState<StudentData[]>(MOCK_DATA);
   const [isUsingMock, setIsUsingMock] = useState(true);
@@ -158,20 +188,18 @@ export default function StudifyPlatform() {
   const kpi = useMemo(() => {
     const totalStudents = filteredData.length;
     const avgImprovement = filteredData.reduce((acc, cur) => acc + (cur.後測成績 - cur.前測成績), 0) / (totalStudents || 1);
-    const highRiskCount = filteredData.filter(d => (d.後測成績 - d.前測成績) < 0).length;
 
-    // 計算總分鐘數並取平均
-    let totalMinutes = 0;
-    filteredData.forEach(d => {
-      totalMinutes += parseTime(d.使用總時數);
-    });
-    const avgUsageTime = totalMinutes / (totalStudents || 1);
+    // 計算各種標籤的人數
+    const potentialCount = filteredData.filter(d => d.tag === '潛力股').length;
+    const ineffectiveCount = filteredData.filter(d => d.tag === '無效學習').length;
+    const attentionCount = filteredData.filter(d => d.tag === '需關懷').length;
 
     return {
       totalStudents,
       avgImprovement: avgImprovement.toFixed(1),
-      highRiskCount,
-      avgUsageTime: Math.round(avgUsageTime) // 四捨五入到整數位
+      potentialCount,
+      ineffectiveCount,
+      attentionCount
     };
   }, [filteredData]);
 
@@ -181,7 +209,8 @@ export default function StudifyPlatform() {
       y: d.後測成績 - d.前測成績,
       z: d.後測成績,
       name: d.姓名 || `S${i}`,
-      school: d.學校名稱
+      school: d.學校名稱,
+      tag: d.tag // 傳入 tag 以便將來擴充圖表顏色
     })).slice(0, 100);
 
     const schoolImprovement: Record<string, { total: number, count: number }> = {};
@@ -198,110 +227,77 @@ export default function StudifyPlatform() {
     return { scatter, bar };
   }, [filteredData]);
 
-  // --- PDF 匯出功能 ---
   const handleExportPDF = async () => {
-    const element = document.getElementById('report-content'); // 抓取要截圖的範圍 ID
+    const element = document.getElementById('report-content');
     if (!element) return;
-
-    setIsExporting(true); // 開始 loading
-
+    setIsExporting(true);
     try {
-      // 1. 使用 html2canvas 截圖
-      const canvas = await html2canvas(element, {
-        scale: 2, // 提高解析度
-        useCORS: true, // 允許跨域圖片
-        logging: false,
-        backgroundColor: '#f8fafc' // 設定背景色 (slate-50)
-      });
-
-      // 2. 轉為 PDF
+      const canvas = await html2canvas(element, { scale: 2, useCORS: true, backgroundColor: '#f8fafc' });
       const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4'); // A4 直式
+      const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
-
       const imgProps = pdf.getImageProperties(imgData);
       const imgHeight = (imgProps.height * pdfWidth) / imgProps.width;
-
-      // 標題
       pdf.setFontSize(16);
-      pdf.text("Studify Learning Analysis Report", 10, 15);
+      pdf.text("Studify AI Learning Report", 10, 15);
       pdf.setFontSize(10);
-      pdf.text(`Generated on: ${new Date().toLocaleDateString()}`, 10, 22);
-
-      // 貼上截圖 (如果圖片太長，這裡只示範第一頁，進階可做分頁)
+      pdf.text(`Generated: ${new Date().toLocaleDateString()}`, 10, 22);
       pdf.addImage(imgData, 'PNG', 0, 30, pdfWidth, imgHeight);
-
-      // 3. 下載
-      pdf.save(`Studify_Report_${new Date().toISOString().slice(0,10)}.pdf`);
+      pdf.save(`Studify_Report.pdf`);
     } catch (error) {
-      console.error('Export failed', error);
-      alert('匯出失敗，請重試。');
+      alert('匯出失敗');
     } finally {
-      setIsExporting(false); // 結束 loading
+      setIsExporting(false);
     }
   };
 
-  // --- 檔案上傳 ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const fileExt = file.name.split('.').pop()?.toLowerCase();
+
+    const processFile = (data: any[]) => {
+        const processed = processImportedData(data);
+        if (processed.length > 0) {
+          setRawData(processed);
+          setIsUsingMock(false);
+          alert(`成功載入 ${processed.length} 筆資料！AI 已完成自動診斷。`);
+        } else {
+          alert('讀取失敗，無有效資料。');
+        }
+    };
 
     if (fileExt === 'xlsx' || fileExt === 'xls') {
       const reader = new FileReader();
       reader.onload = (evt) => {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
-        const jsonData = XLSX.utils.sheet_to_json(ws);
-        const processed = processImportedData(jsonData);
-        if (processed.length > 0) {
-          setRawData(processed);
-          setIsUsingMock(false);
-          alert(`成功載入 ${processed.length} 筆資料！`);
-        } else {
-          alert('Excel 讀取成功，但找不到符合格式的資料。請確認欄位名稱。');
-        }
+        const wb = XLSX.read(evt.target?.result, { type: 'binary' });
+        const jsonData = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+        processFile(jsonData);
       };
       reader.readAsBinaryString(file);
-    }
-    else if (fileExt === 'csv') {
+    } else if (fileExt === 'csv') {
       Papa.parse(file, {
         header: true,
         skipEmptyLines: true,
-        complete: (results) => {
-          const processed = processImportedData(results.data);
-          if (processed.length > 0) {
-            setRawData(processed);
-            setIsUsingMock(false);
-            alert(`成功載入 ${processed.length} 筆資料！`);
-          } else {
-            alert('CSV 讀取成功，但找不到符合格式的資料。請確認檔案編碼 (UTF-8) 或欄位名稱。');
-          }
-        }
+        complete: (results) => processFile(results.data)
       });
     }
     e.target.value = '';
   };
 
-  // --- 頁面內容渲染邏輯 ---
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
         return (
           <div className="space-y-8 animate-in fade-in duration-500">
-            {/* KPI Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               <StatCard title="學生總數" value={kpi.totalStudents.toLocaleString()} subtext="Students" icon={Users} colorClass="bg-blue-50 text-blue-600" />
-              <StatCard title="平均進步分數" value={`+${kpi.avgImprovement}`} subtext="Points" icon={TrendingUp} colorClass="bg-emerald-50 text-emerald-600" />
-              <StatCard title="平均使用分鐘" value={`${kpi.avgUsageTime} min`} subtext="Avg Duration" icon={FileSpreadsheet} colorClass="bg-violet-50 text-violet-600" />
-              <StatCard title="學習退步警示" value={kpi.highRiskCount} subtext="Attention Needed" icon={AlertTriangle} colorClass="bg-rose-50 text-rose-600" />
+              <StatCard title="潛力股學生" value={kpi.potentialCount} subtext="High Potential" icon={TrendingUp} colorClass="bg-emerald-50 text-emerald-600" />
+              <StatCard title="無效學習警示" value={kpi.ineffectiveCount} subtext="Ineffective" icon={AlertTriangle} colorClass="bg-rose-50 text-rose-600" />
+              <StatCard title="需關懷人數" value={kpi.attentionCount} subtext="Needs Help" icon={BrainCircuit} colorClass="bg-amber-50 text-amber-600" />
             </div>
 
-            {/* Charts Area */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 h-[500px]">
               <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col">
                 <div className="mb-6"><h3 className="text-lg font-bold text-slate-800">各校平均進步幅度</h3></div>
@@ -344,34 +340,35 @@ export default function StudifyPlatform() {
              <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
                 <div>
                   <h3 className="text-lg font-bold text-slate-800">詳細學生數據列表</h3>
-                  <p className="text-sm text-slate-500 mt-1">檢視所有原始數據與個別指標</p>
+                  <p className="text-sm text-slate-500 mt-1">AI 自動診斷標籤已啟用</p>
                 </div>
-                <div className="flex gap-2">
-                  <span className="text-xs font-mono text-slate-500 bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm">
-                     顯示筆數: {filteredData.length}
-                  </span>
-                </div>
+                <span className="text-xs font-mono text-slate-500 bg-white border border-slate-200 px-3 py-1.5 rounded-lg">
+                   筆數: {filteredData.length}
+                </span>
              </div>
              <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm">
                    <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
                       <tr>
                          <th className="px-6 py-4 whitespace-nowrap">學校</th>
-                         <th className="px-6 py-4 whitespace-nowrap">姓名/代號</th>
-                         <th className="px-6 py-4 whitespace-nowrap">科目</th>
+                         <th className="px-6 py-4 whitespace-nowrap">姓名</th>
+                         <th className="px-6 py-4 text-center">AI 診斷</th>
                          <th className="px-6 py-4 text-right">前測</th>
                          <th className="px-6 py-4 text-right">後測</th>
                          <th className="px-6 py-4 text-right">進步</th>
-                         <th className="px-6 py-4 text-right">使用時數 (原始)</th>
-                         <th className="px-6 py-4 text-right">換算分鐘</th>
+                         <th className="px-6 py-4 text-right">使用時數</th>
                       </tr>
                    </thead>
                    <tbody className="divide-y divide-slate-100">
-                      {filteredData.slice(0, 50).map((d, i) => ( // 限制顯示 50 筆避免卡頓
+                      {filteredData.slice(0, 50).map((d, i) => (
                          <tr key={i} className="hover:bg-slate-50/80 transition-colors">
                             <td className="px-6 py-4 font-medium text-slate-700">{d.學校名稱}</td>
                             <td className="px-6 py-4 text-slate-500">{d.姓名}</td>
-                            <td className="px-6 py-4"><span className="px-2 py-1 rounded bg-slate-100 text-slate-600 text-xs">{d.科目}</span></td>
+                            <td className="px-6 py-4 text-center">
+                               <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${d.tag ? TAG_STYLES[d.tag] : TAG_STYLES['穩定']}`}>
+                                 {d.tag}
+                               </span>
+                            </td>
                             <td className="px-6 py-4 text-right text-slate-500">{d.前測成績}</td>
                             <td className="px-6 py-4 text-right font-bold text-slate-700">{d.後測成績}</td>
                             <td className="px-6 py-4 text-right">
@@ -379,7 +376,6 @@ export default function StudifyPlatform() {
                                  {d.前後側差異 > 0 ? '+' : ''}{d.前後側差異}
                                </span>
                             </td>
-                            <td className="px-6 py-4 text-right text-slate-400 font-mono text-xs">{d.使用總時數}</td>
                             <td className="px-6 py-4 text-right text-slate-600 font-mono">{parseTime(d.使用總時數)} min</td>
                          </tr>
                       ))}
@@ -387,7 +383,7 @@ export default function StudifyPlatform() {
                 </table>
                 {filteredData.length > 50 && (
                   <div className="p-4 text-center text-slate-400 text-xs border-t border-slate-100">
-                    僅顯示前 50 筆資料，請使用篩選器縮小範圍
+                    僅顯示前 50 筆資料
                   </div>
                 )}
              </div>
@@ -402,63 +398,47 @@ export default function StudifyPlatform() {
                 <Settings className="text-slate-600" />
                 系統設定
               </h2>
-
-              <div className="space-y-6">
-                <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
-                  <h4 className="font-bold text-blue-900 flex items-center gap-2 mb-2">
-                    <Info size={18} />
-                    關於本系統
-                  </h4>
-                  <p className="text-sm text-blue-700 leading-relaxed">
-                    Studify AI 是一個專為教育現場設計的數據分析平台。
-                    支援上傳 .csv 或 .xlsx 格式的學習紀錄，並透過前端運算即時產生視覺化報表。
-                    目前版本：v1.2.0 (Local Preview)
-                  </p>
+              <div className="p-4 bg-blue-50 rounded-xl border border-blue-100 mb-6">
+                <h4 className="font-bold text-blue-900 flex items-center gap-2 mb-2">
+                  <Tag size={18} />
+                  AI 分群規則說明
+                </h4>
+                <ul className="text-sm text-blue-700 space-y-1 list-disc list-inside">
+                  <li><span className="font-bold">無效學習</span>：使用 > 60 分鐘且進步分數 ≤ 0</li>
+                  <li><span className="font-bold">潛力股</span>：使用 < 30 分鐘且進步分數 ≥ 10</li>
+                  <li><span className="font-bold">需關懷</span>：後測成績 < 60 分</li>
+                  <li><span className="font-bold">穩定發展</span>：其他情況</li>
+                </ul>
+              </div>
+              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">
+                <div>
+                  <div className="font-medium text-slate-900">重置資料</div>
+                  <div className="text-xs text-slate-500">恢復為預設範例資料</div>
                 </div>
-
-                <div className="pt-6 border-t border-slate-100">
-                  <h4 className="font-bold text-slate-700 mb-4">資料管理</h4>
-                  <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">
-                    <div>
-                      <div className="font-medium text-slate-900">清除所有數據</div>
-                      <div className="text-xs text-slate-500">將目前的數據清空並恢復為預設範例資料</div>
-                    </div>
-                    <button
-                      onClick={() => {
-                        if(confirm('確定要清除目前上傳的資料並恢復預設嗎？')) {
-                          setRawData(MOCK_DATA);
-                          setIsUsingMock(true);
-                        }
-                      }}
-                      className="px-4 py-2 bg-white border border-rose-200 text-rose-600 rounded-lg hover:bg-rose-50 font-medium text-sm flex items-center gap-2 transition-colors"
-                    >
-                      <Trash2 size={16} />
-                      重置資料
-                    </button>
-                  </div>
-                </div>
+                <button
+                  onClick={() => { if(confirm('確定重置？')) { setRawData(MOCK_DATA); setIsUsingMock(true); }}}
+                  className="px-4 py-2 bg-white border border-rose-200 text-rose-600 rounded-lg hover:bg-rose-50 font-medium text-sm flex items-center gap-2"
+                >
+                  <Trash2 size={16} /> 重置
+                </button>
               </div>
             </div>
           </div>
         );
 
       default:
-        return <div>頁面建置中...</div>;
+        return <div>Loading...</div>;
     }
   };
 
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900">
-
-      {/* Sidebar */}
       <aside className={`${isSidebarOpen ? 'w-72' : 'w-20'} bg-slate-900 text-white transition-all duration-300 flex flex-col fixed h-full z-20 shadow-2xl`}>
         <div className="h-16 flex items-center px-6 border-b border-slate-800 bg-slate-950">
           <BrainCircuit className="text-emerald-400 mr-3 shrink-0" size={28} />
           {isSidebarOpen && <span className="text-xl font-bold tracking-tight bg-gradient-to-r from-emerald-400 to-blue-500 text-transparent bg-clip-text">Studify AI</span>}
         </div>
-
         <nav className="flex-1 py-6 px-4 space-y-2 overflow-y-auto">
-          {/* Menu Items */}
           {[
             { id: 'dashboard', label: '總覽儀表板', icon: LayoutDashboard },
             { id: 'analysis', label: '詳細數據列表', icon: FileSpreadsheet },
@@ -471,121 +451,53 @@ export default function StudifyPlatform() {
             >
               <item.icon size={20} />
               {isSidebarOpen && <span className="ml-3 font-medium">{item.label}</span>}
-              {activeTab === item.id && isSidebarOpen && <ChevronRight className="ml-auto opacity-50" size={16} />}
             </button>
           ))}
-
-          {/* Interactive Filters */}
           {isSidebarOpen && (
-            <div className="mt-8 pt-6 border-t border-slate-700">
-              <div className="flex items-center gap-2 mb-4 text-emerald-400 px-2">
-                <Filter size={16} />
-                <span className="text-xs font-bold uppercase tracking-wider">數據篩選器</span>
-              </div>
-
-              <div className="space-y-4 px-2">
-                <div>
-                  <label className="text-xs text-slate-400 mb-1.5 block">選擇學校</label>
-                  <select
-                    value={selectedSchool}
-                    onChange={(e) => setSelectedSchool(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none text-white"
-                  >
-                    {schools.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs text-slate-400 mb-1.5 block">選擇科目</label>
-                  <select
-                    value={selectedSubject}
-                    onChange={(e) => setSelectedSubject(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none text-white"
-                  >
-                    {subjects.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              {/* Upload Area */}
-              <div className="mt-8 px-2">
-                 <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-slate-700 border-dashed rounded-xl cursor-pointer bg-slate-800/50 hover:bg-slate-800 hover:border-emerald-500 transition-all group">
-                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                        <UploadCloud className="w-8 h-8 text-slate-500 group-hover:text-emerald-400 mb-2 transition-colors" />
-                        <p className="text-xs text-slate-400 text-center"><span className="font-semibold text-emerald-500">點擊上傳</span> Excel / CSV</p>
-                    </div>
-                    <input type="file" accept=".csv, .xlsx, .xls" className="hidden" onChange={handleFileUpload} />
-                </label>
-                {isUsingMock && <p className="text-[10px] text-slate-500 mt-2 text-center">* 目前顯示範例資料</p>}
-              </div>
+            <div className="mt-8 pt-6 border-t border-slate-700 px-2 space-y-4">
+              <div className="flex items-center gap-2 text-emerald-400"><Filter size={16} /><span className="text-xs font-bold uppercase">篩選器</span></div>
+              <select value={selectedSchool} onChange={(e) => setSelectedSchool(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-500">
+                {schools.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <select value={selectedSubject} onChange={(e) => setSelectedSubject(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-500">
+                {subjects.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-slate-700 border-dashed rounded-xl cursor-pointer bg-slate-800/50 hover:bg-slate-800 hover:border-emerald-500 transition-all group mt-4">
+                  <div className="flex flex-col items-center justify-center pt-2 pb-3">
+                      <UploadCloud className="w-8 h-8 text-slate-500 group-hover:text-emerald-400 mb-2 transition-colors" />
+                      <p className="text-xs text-slate-400 text-center"><span className="font-semibold text-emerald-500">上傳</span> Excel / CSV</p>
+                  </div>
+                  <input type="file" accept=".csv, .xlsx, .xls" className="hidden" onChange={handleFileUpload} />
+              </label>
             </div>
           )}
         </nav>
-
         <div className="p-4 border-t border-slate-800">
-          <button
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="w-full flex justify-center p-2 rounded-lg hover:bg-slate-800 text-slate-400 transition-colors"
-          >
-            <ChevronRight className={`transition-transform duration-300 ${isSidebarOpen ? "rotate-180" : ""}`} />
-          </button>
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="w-full flex justify-center p-2 rounded-lg hover:bg-slate-800 text-slate-400"><ChevronRight className={`${isSidebarOpen ? "rotate-180" : ""}`} /></button>
         </div>
       </aside>
 
-      {/* Main Content */}
       <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? 'ml-72' : 'ml-20'}`}>
-
-        {/* Header */}
         <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-10 px-8 flex items-center justify-between shadow-sm">
-          <div className="flex items-center text-slate-400 bg-slate-100 px-4 py-2 rounded-full w-96 border border-transparent focus-within:border-blue-500 focus-within:bg-white transition-all">
-            <Search size={18} />
-            <input
-              type="text"
-              placeholder="搜尋學生、學校或是關鍵字..."
-              className="bg-transparent border-none focus:outline-none ml-2 text-sm text-slate-800 w-full placeholder:text-slate-400"
-            />
-          </div>
+          <div className="flex items-center text-slate-400 bg-slate-100 px-4 py-2 rounded-full w-96"><Search size={18} /><input type="text" placeholder="搜尋..." className="bg-transparent border-none focus:outline-none ml-2 text-sm w-full" /></div>
           <div className="flex items-center gap-4">
-             <div className="hidden md:flex flex-col items-end mr-2">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">DATA SOURCE</span>
-                <span className={`text-xs font-bold ${isUsingMock ? 'text-amber-500' : 'text-emerald-600'}`}>
-                  {isUsingMock ? 'MOCK DATA' : 'UPLOADED FILE'}
-                </span>
-             </div>
-             <button className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors relative">
-                <Bell size={20} />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
-             </button>
-             <div className="w-9 h-9 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-full flex items-center justify-center text-white font-bold shadow-lg shadow-blue-200">
-                A
-             </div>
+             <div className="hidden md:flex flex-col items-end mr-2"><span className="text-xs font-bold text-slate-400 uppercase">SOURCE</span><span className={`text-xs font-bold ${isUsingMock ? 'text-amber-500' : 'text-emerald-600'}`}>{isUsingMock ? 'MOCK' : 'UPLOADED'}</span></div>
+             <button className="p-2 text-slate-400 hover:text-blue-600 rounded-full relative"><Bell size={20} /><span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border border-white"></span></button>
+             <div className="w-9 h-9 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-full flex items-center justify-center text-white font-bold shadow-lg">A</div>
           </div>
         </header>
 
-        {/* Dynamic Content Area */}
         <div id="report-content" className="p-8 max-w-[1600px] mx-auto space-y-8 bg-slate-50 min-h-[calc(100vh-64px)]">
-
           <div className="flex justify-between items-end">
             <div>
               <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">數位學習成效分析</h1>
-              <p className="text-slate-500 mt-2 flex items-center gap-2">
-                <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold">113學年度</span>
-                目前顯示範圍：{selectedSchool === 'All' ? '所有學校' : selectedSchool} / {selectedSubject === 'All' ? '所有科目' : selectedSubject}
-              </p>
+              <p className="text-slate-500 mt-2 flex items-center gap-2"><span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold">113學年度</span>目前顯示：{selectedSchool === 'All' ? '所有學校' : selectedSchool} / {selectedSubject === 'All' ? '所有科目' : selectedSubject}</p>
             </div>
-
-            {/* 匯出 PDF 按鈕 */}
-            <button
-              onClick={handleExportPDF}
-              disabled={isExporting}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 font-medium shadow-sm transition-all disabled:opacity-50"
-            >
-               {isExporting ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
-               {isExporting ? '匯出中...' : '匯出報告'}
+            <button onClick={handleExportPDF} disabled={isExporting} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 font-medium shadow-sm transition-all disabled:opacity-50">
+               {isExporting ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}{isExporting ? '處理中...' : '匯出 PDF'}
             </button>
           </div>
-
           {renderContent()}
-
         </div>
       </main>
     </div>
