@@ -12,10 +12,6 @@ import {
   UploadCloud,
   FileSpreadsheet,
   TrendingUp,
-  Share2,
-  X,
-  Copy,
-  Check,
   Filter,
   Download
 } from 'lucide-react';
@@ -28,11 +24,7 @@ import {
   Tooltip,
   ResponsiveContainer,
   ScatterChart,
-  Scatter,
-  Legend,
-  PieChart,
-  Pie,
-  Cell
+  Scatter
 } from 'recharts';
 
 // --- 型別定義 ---
