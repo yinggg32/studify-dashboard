@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import Papa from 'papaparse';
+import * as XLSX from 'xlsx'; // 引入 Excel 處理套件
 import {
   LayoutDashboard,
   Users,
@@ -49,7 +50,31 @@ const parseTime = (timeStr: string) => {
   return parseInt(parts[0]) * 60 + parseInt(parts[1]); // 轉為分鐘
 };
 
-// 預設範例資料 (當還沒上傳時顯示)
+// 統一處理匯入的資料 (不論是 CSV 還是 Excel 轉出的 JSON)
+const processImportedData = (jsonData: any[]) => {
+  return jsonData
+    .filter((row: any) => {
+       // 寬鬆檢查：只要有前後測成績 (不管欄位名稱是中文還是亂碼，嘗試讀取值)
+       const pre = row['前測成績'] || row['PreScore'];
+       const post = row['後測成績'] || row['PostScore'];
+       return pre !== undefined && post !== undefined;
+    })
+    .map((row: any) => ({
+      學校名稱: row['學校名稱'] || '未知學校',
+      年級: row['年級'] || row['本測驗實施年級'] || '未知',
+      科目: row['科目'] || row['本表單施測科目領域'] || '一般',
+      前測成績: parseFloat(row['前測成績']),
+      後測成績: parseFloat(row['後測成績']),
+      前後側差異: parseFloat(row['後測成績']) - parseFloat(row['前測成績']),
+      使用總時數: row['使用總時數'] || '00:00:00',
+      任務完成: parseInt(row['任務完成'] || '0'),
+      練習題測驗: parseInt(row['練習題測驗'] || '0'),
+      姓名: row['實施教師姓名'] ? `學生(${row['實施教師姓名']}班)` :
+            row['姓名'] ? row['姓名'] : '學生'
+    }));
+};
+
+// 預設範例資料
 const MOCK_DATA: StudentData[] = Array.from({ length: 100 }, (_, i) => {
   const pre = Math.floor(Math.random() * 40) + 40;
   const post = Math.min(100, pre + Math.floor(Math.random() * 30));
@@ -103,27 +128,22 @@ export default function StudifyPlatform() {
   const [selectedSubject, setSelectedSubject] = useState<string>('All');
 
   // --- 資料處理邏輯 (useMemo 優化效能) ---
-
-  // 1. 取得所有學校和科目的選項
   const schools = useMemo(() => ['All', ...new Set(rawData.map(d => d.學校名稱))], [rawData]);
-  const subjects = useMemo(() => ['All', ...new Set(rawData.map(d => d.科目 || '數學'))], [rawData]); // 預設數學防止空值
+  const subjects = useMemo(() => ['All', ...new Set(rawData.map(d => d.科目 || '數學'))], [rawData]);
 
-  // 2. 根據篩選器過濾資料
   const filteredData = useMemo(() => {
     return rawData.filter(d => {
       const matchSchool = selectedSchool === 'All' || d.學校名稱 === selectedSchool;
-      // 簡單處理科目可能為 undefined 的情況
       const subject = d.科目 || '數學';
       const matchSubject = selectedSubject === 'All' || subject === selectedSubject;
       return matchSchool && matchSubject;
     });
   }, [rawData, selectedSchool, selectedSubject]);
 
-  // 3. 計算 KPI
   const kpi = useMemo(() => {
     const totalStudents = filteredData.length;
     const avgImprovement = filteredData.reduce((acc, cur) => acc + (cur.後測成績 - cur.前測成績), 0) / (totalStudents || 1);
-    const highRiskCount = filteredData.filter(d => (d.後測成績 - d.前測成績) < 0).length; // 退步的人
+    const highRiskCount = filteredData.filter(d => (d.後測成績 - d.前測成績) < 0).length;
     const avgUsageTime = filteredData.reduce((acc, cur) => acc + parseTime(cur.使用總時數), 0) / (totalStudents || 1);
 
     return {
@@ -134,18 +154,15 @@ export default function StudifyPlatform() {
     };
   }, [filteredData]);
 
-  // 4. 準備圖表資料
   const chartData = useMemo(() => {
-    // 散佈圖資料 (時間 vs 進步)
     const scatter = filteredData.map((d, i) => ({
       x: parseTime(d.使用總時數),
       y: d.後測成績 - d.前測成績,
-      z: d.後測成績, // 氣泡大小可以用後測成績
+      z: d.後測成績,
       name: d.姓名 || `S${i}`,
       school: d.學校名稱
-    })).slice(0, 100); // 限制點數避免過慢
+    })).slice(0, 100);
 
-    // 長條圖資料 (各校平均進步)
     const schoolImprovement: Record<string, { total: number, count: number }> = {};
     filteredData.forEach(d => {
       if (!schoolImprovement[d.學校名稱]) schoolImprovement[d.學校名稱] = { total: 0, count: 0 };
@@ -160,55 +177,57 @@ export default function StudifyPlatform() {
     return { scatter, bar };
   }, [filteredData]);
 
-  // --- 檔案上傳處理 (增強版) ---
+  // --- 檔案上傳處理 (支援 CSV 與 Excel) ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true, // 跳過空行
-      complete: (results) => {
-        // Debug: 如果是亂碼，fields 會是亂碼
-        console.log("偵測到的欄位:", results.meta.fields);
+    const fileExt = file.name.split('.').pop()?.toLowerCase();
 
-        const parsedData = results.data
-          .filter((row: any) => {
-             // 檢查關鍵欄位是否存在 (兼容亂碼或 BOM 的情況，這裡先檢查值)
-             const hasPreScore = row['前測成績'] !== undefined && row['前測成績'] !== '';
-             const hasPostScore = row['後測成績'] !== undefined && row['後測成績'] !== '';
-             return hasPreScore && hasPostScore;
-          })
-          .map((row: any) => ({
-            學校名稱: row['學校名稱'] || '未知學校',
-            // 兼容您 CSV 的特定欄位名稱
-            年級: row['年級'] || row['本測驗實施年級'] || '未知',
-            科目: row['科目'] || row['本表單施測科目領域'] || '一般',
-            前測成績: parseFloat(row['前測成績']),
-            後測成績: parseFloat(row['後測成績']),
-            前後側差異: parseFloat(row['後測成績']) - parseFloat(row['前測成績']),
-            使用總時數: row['使用總時數'] || '00:00:00',
-            任務完成: parseInt(row['任務完成'] || '0'),
-            練習題測驗: parseInt(row['練習題測驗'] || '0'),
-            姓名: row['實施教師姓名'] ? `學生(${row['實施教師姓名']}班)` :
-                  row['姓名'] ? row['姓名'] : '學生'
-          }));
+    // 處理 Excel (.xlsx, .xls)
+    if (fileExt === 'xlsx' || fileExt === 'xls') {
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0]; // 讀取第一個工作表
+        const ws = wb.Sheets[wsname];
+        const jsonData = XLSX.utils.sheet_to_json(ws);
 
-        if (parsedData.length === 0) {
-           alert("讀取失敗：沒有找到有效的資料。\n\n可能原因：\n1. 檔案編碼不是 UTF-8 (請另存為 UTF-8 CSV)\n2. 找不到「前測成績」與「後測成績」欄位");
+        const processed = processImportedData(jsonData);
+        if (processed.length > 0) {
+          setRawData(processed);
+          setIsUsingMock(false);
+          alert(`成功從 Excel 載入 ${processed.length} 筆資料！`);
         } else {
-           setRawData(parsedData);
-           setIsUsingMock(false);
-           alert(`成功載入 ${parsedData.length} 筆學生資料！`);
+          alert('Excel 讀取失敗或無有效資料，請確認欄位名稱。');
         }
+      };
+      reader.readAsBinaryString(file);
+    }
+    // 處理 CSV
+    else if (fileExt === 'csv') {
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          const processed = processImportedData(results.data);
+          if (processed.length > 0) {
+            setRawData(processed);
+            setIsUsingMock(false);
+            alert(`成功從 CSV 載入 ${processed.length} 筆資料！`);
+          } else {
+            alert('CSV 讀取失敗或無有效資料。');
+          }
+        },
+        error: (error) => alert(`CSV 解析錯誤: ${error.message}`)
+      });
+    } else {
+      alert('不支援的檔案格式，請上傳 .csv 或 .xlsx 檔案');
+    }
 
-        // 重置 input value 以便重複上傳同一個檔案
-        e.target.value = '';
-      },
-      error: (error) => {
-         alert(`解析錯誤: ${error.message}`);
-      }
-    });
+    // 重置 input
+    e.target.value = '';
   };
 
   return (
@@ -222,7 +241,6 @@ export default function StudifyPlatform() {
         </div>
 
         <nav className="flex-1 py-6 px-4 space-y-2 overflow-y-auto">
-          {/* Menu Items */}
           {['dashboard', 'analysis', 'settings'].map(tab => (
             <button
               key={tab}
@@ -237,7 +255,7 @@ export default function StudifyPlatform() {
             </button>
           ))}
 
-          {/* Interactive Filters (類似 Streamlit 的側邊欄) */}
+          {/* 側邊欄篩選器與上傳區 */}
           {isSidebarOpen && (
             <div className="mt-8 pt-6 border-t border-slate-700">
               <div className="flex items-center gap-2 mb-4 text-emerald-400 px-2">
@@ -268,14 +286,14 @@ export default function StudifyPlatform() {
                 </div>
               </div>
 
-              {/* CSV Upload in Sidebar */}
+              {/* Upload Area */}
               <div className="mt-8 px-2">
                  <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-slate-700 border-dashed rounded-xl cursor-pointer bg-slate-800/50 hover:bg-slate-800 hover:border-emerald-500 transition-all group">
                     <div className="flex flex-col items-center justify-center pt-5 pb-6">
                         <UploadCloud className="w-8 h-8 text-slate-500 group-hover:text-emerald-400 mb-2 transition-colors" />
-                        <p className="text-xs text-slate-400 text-center"><span className="font-semibold text-emerald-500">點擊上傳</span> CSV 檔案</p>
+                        <p className="text-xs text-slate-400 text-center"><span className="font-semibold text-emerald-500">點擊上傳</span> Excel / CSV</p>
                     </div>
-                    <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
+                    <input type="file" accept=".csv, .xlsx, .xls" className="hidden" onChange={handleFileUpload} />
                 </label>
                 {isUsingMock && <p className="text-[10px] text-slate-500 mt-2 text-center">* 目前顯示範例資料</p>}
               </div>
@@ -310,7 +328,7 @@ export default function StudifyPlatform() {
              <div className="hidden md:flex flex-col items-end mr-2">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">DATA SOURCE</span>
                 <span className={`text-xs font-bold ${isUsingMock ? 'text-amber-500' : 'text-emerald-600'}`}>
-                  {isUsingMock ? 'MOCK DATA' : 'UPLOADED CSV'}
+                  {isUsingMock ? 'MOCK DATA' : 'UPLOADED FILE'}
                 </span>
              </div>
              <button className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors relative">
@@ -400,7 +418,7 @@ export default function StudifyPlatform() {
               </div>
             </div>
 
-            {/* Right: Scatter Chart (Streamlit Style) */}
+            {/* Right: Scatter Chart */}
             <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col">
               <div className="mb-2">
                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
