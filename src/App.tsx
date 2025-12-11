@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
+import html2canvas from 'html2canvas'; // 用於截圖
+import jsPDF from 'jspdf'; // 用於產生 PDF
 import {
   LayoutDashboard,
   Users,
@@ -17,7 +19,8 @@ import {
   Download,
   Settings,
   Trash2,
-  Info
+  Info,
+  Loader2 // 載入動畫
 } from 'lucide-react';
 import {
   BarChart,
@@ -45,18 +48,20 @@ interface StudentData {
   姓名?: string;
 }
 
-// --- 輔助函數 (增強版) ---
+// --- 輔助函數 ---
 const parseTime = (val: any) => {
   if (!val) return 0;
-  // 強制轉為字串處理，避免數值型別報錯
+  // 1. 處理 Excel 數值時間 (例如 0.5 代表 12:00)
+  if (typeof val === 'number') {
+    return Math.round(val * 24 * 60);
+  }
+  // 2. 處理字串時間 "HH:MM:SS"
   const timeStr = String(val).trim();
-
-  // 處理 "HH:MM:SS" 或 "HH:MM" 格式
   const parts = timeStr.split(':');
   if (parts.length >= 2) {
     const hours = parseInt(parts[0]) || 0;
     const minutes = parseInt(parts[1]) || 0;
-    return hours * 60 + minutes; // 轉為分鐘
+    return hours * 60 + minutes;
   }
   return 0;
 };
@@ -65,6 +70,7 @@ const parseTime = (val: any) => {
 const processImportedData = (jsonData: any[]) => {
   return jsonData
     .filter((row: any) => {
+       // 寬鬆檢查：只要有前後測成績 (不管欄位名稱是中文還是亂碼，嘗試讀取值)
        const pre = row['前測成績'] || row['PreScore'];
        const post = row['後測成績'] || row['PostScore'];
        return pre !== undefined && post !== undefined;
@@ -128,6 +134,7 @@ const StatCard = ({ title, value, subtext, icon: Icon, colorClass }: any) => (
 export default function StudifyPlatform() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isExporting, setIsExporting] = useState(false); // 控制匯出狀態
 
   const [rawData, setRawData] = useState<StudentData[]>(MOCK_DATA);
   const [isUsingMock, setIsUsingMock] = useState(true);
@@ -191,6 +198,50 @@ export default function StudifyPlatform() {
     return { scatter, bar };
   }, [filteredData]);
 
+  // --- PDF 匯出功能 ---
+  const handleExportPDF = async () => {
+    const element = document.getElementById('report-content'); // 抓取要截圖的範圍 ID
+    if (!element) return;
+
+    setIsExporting(true); // 開始 loading
+
+    try {
+      // 1. 使用 html2canvas 截圖
+      const canvas = await html2canvas(element, {
+        scale: 2, // 提高解析度
+        useCORS: true, // 允許跨域圖片
+        logging: false,
+        backgroundColor: '#f8fafc' // 設定背景色 (slate-50)
+      });
+
+      // 2. 轉為 PDF
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4'); // A4 直式
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+
+      const imgProps = pdf.getImageProperties(imgData);
+      const imgHeight = (imgProps.height * pdfWidth) / imgProps.width;
+
+      // 標題
+      pdf.setFontSize(16);
+      pdf.text("Studify Learning Analysis Report", 10, 15);
+      pdf.setFontSize(10);
+      pdf.text(`Generated on: ${new Date().toLocaleDateString()}`, 10, 22);
+
+      // 貼上截圖 (如果圖片太長，這裡只示範第一頁，進階可做分頁)
+      pdf.addImage(imgData, 'PNG', 0, 30, pdfWidth, imgHeight);
+
+      // 3. 下載
+      pdf.save(`Studify_Report_${new Date().toISOString().slice(0,10)}.pdf`);
+    } catch (error) {
+      console.error('Export failed', error);
+      alert('匯出失敗，請重試。');
+    } finally {
+      setIsExporting(false); // 結束 loading
+    }
+  };
+
   // --- 檔案上傳 ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -211,6 +262,8 @@ export default function StudifyPlatform() {
           setRawData(processed);
           setIsUsingMock(false);
           alert(`成功載入 ${processed.length} 筆資料！`);
+        } else {
+          alert('Excel 讀取成功，但找不到符合格式的資料。請確認欄位名稱。');
         }
       };
       reader.readAsBinaryString(file);
@@ -225,6 +278,8 @@ export default function StudifyPlatform() {
             setRawData(processed);
             setIsUsingMock(false);
             alert(`成功載入 ${processed.length} 筆資料！`);
+          } else {
+            alert('CSV 讀取成功，但找不到符合格式的資料。請確認檔案編碼 (UTF-8) 或欄位名稱。');
           }
         }
       });
@@ -506,8 +561,8 @@ export default function StudifyPlatform() {
           </div>
         </header>
 
-        {/* Dynamic Content Area - Switch based on renderContent */}
-        <div className="p-8 max-w-[1600px] mx-auto space-y-8">
+        {/* Dynamic Content Area */}
+        <div id="report-content" className="p-8 max-w-[1600px] mx-auto space-y-8 bg-slate-50 min-h-[calc(100vh-64px)]">
 
           <div className="flex justify-between items-end">
             <div>
@@ -517,9 +572,15 @@ export default function StudifyPlatform() {
                 目前顯示範圍：{selectedSchool === 'All' ? '所有學校' : selectedSchool} / {selectedSubject === 'All' ? '所有科目' : selectedSubject}
               </p>
             </div>
-            <button className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 font-medium shadow-sm transition-all">
-               <Download size={18} />
-               匯出報告
+
+            {/* 匯出 PDF 按鈕 */}
+            <button
+              onClick={handleExportPDF}
+              disabled={isExporting}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 font-medium shadow-sm transition-all disabled:opacity-50"
+            >
+               {isExporting ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
+               {isExporting ? '匯出中...' : '匯出報告'}
             </button>
           </div>
 
