@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import Papa from 'papaparse';
-import * as XLSX from 'xlsx'; // 引入 Excel 處理套件
+import * as XLSX from 'xlsx';
 import {
   LayoutDashboard,
   Users,
@@ -14,7 +14,10 @@ import {
   FileSpreadsheet,
   TrendingUp,
   Filter,
-  Download
+  Download,
+  Settings,
+  Trash2,
+  Info
 } from 'lucide-react';
 import {
   BarChart,
@@ -35,26 +38,33 @@ interface StudentData {
   科目: string;
   前測成績: number;
   後測成績: number;
-  使用總時數: string; // 格式如 "25:12:26"
+  使用總時數: string;
   任務完成: number;
   練習題測驗: number;
   前後側差異: number;
   姓名?: string;
 }
 
-// --- 輔助函數 ---
-const parseTime = (timeStr: string) => {
-  if (!timeStr) return 0;
+// --- 輔助函數 (增強版) ---
+const parseTime = (val: any) => {
+  if (!val) return 0;
+  // 強制轉為字串處理，避免數值型別報錯
+  const timeStr = String(val).trim();
+
+  // 處理 "HH:MM:SS" 或 "HH:MM" 格式
   const parts = timeStr.split(':');
-  if (parts.length !== 3) return 0;
-  return parseInt(parts[0]) * 60 + parseInt(parts[1]); // 轉為分鐘
+  if (parts.length >= 2) {
+    const hours = parseInt(parts[0]) || 0;
+    const minutes = parseInt(parts[1]) || 0;
+    return hours * 60 + minutes; // 轉為分鐘
+  }
+  return 0;
 };
 
-// 統一處理匯入的資料 (不論是 CSV 還是 Excel 轉出的 JSON)
+// 處理匯入資料
 const processImportedData = (jsonData: any[]) => {
   return jsonData
     .filter((row: any) => {
-       // 寬鬆檢查：只要有前後測成績 (不管欄位名稱是中文還是亂碼，嘗試讀取值)
        const pre = row['前測成績'] || row['PreScore'];
        const post = row['後測成績'] || row['PostScore'];
        return pre !== undefined && post !== undefined;
@@ -119,15 +129,13 @@ export default function StudifyPlatform() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
-  // 資料狀態
   const [rawData, setRawData] = useState<StudentData[]>(MOCK_DATA);
   const [isUsingMock, setIsUsingMock] = useState(true);
 
-  // 篩選器狀態
   const [selectedSchool, setSelectedSchool] = useState<string>('All');
   const [selectedSubject, setSelectedSubject] = useState<string>('All');
 
-  // --- 資料處理邏輯 (useMemo 優化效能) ---
+  // --- 資料處理邏輯 ---
   const schools = useMemo(() => ['All', ...new Set(rawData.map(d => d.學校名稱))], [rawData]);
   const subjects = useMemo(() => ['All', ...new Set(rawData.map(d => d.科目 || '數學'))], [rawData]);
 
@@ -144,13 +152,19 @@ export default function StudifyPlatform() {
     const totalStudents = filteredData.length;
     const avgImprovement = filteredData.reduce((acc, cur) => acc + (cur.後測成績 - cur.前測成績), 0) / (totalStudents || 1);
     const highRiskCount = filteredData.filter(d => (d.後測成績 - d.前測成績) < 0).length;
-    const avgUsageTime = filteredData.reduce((acc, cur) => acc + parseTime(cur.使用總時數), 0) / (totalStudents || 1);
+
+    // 計算總分鐘數並取平均
+    let totalMinutes = 0;
+    filteredData.forEach(d => {
+      totalMinutes += parseTime(d.使用總時數);
+    });
+    const avgUsageTime = totalMinutes / (totalStudents || 1);
 
     return {
       totalStudents,
       avgImprovement: avgImprovement.toFixed(1),
       highRiskCount,
-      avgUsageTime: Math.round(avgUsageTime)
+      avgUsageTime: Math.round(avgUsageTime) // 四捨五入到整數位
     };
   }, [filteredData]);
 
@@ -177,35 +191,30 @@ export default function StudifyPlatform() {
     return { scatter, bar };
   }, [filteredData]);
 
-  // --- 檔案上傳處理 (支援 CSV 與 Excel) ---
+  // --- 檔案上傳 ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const fileExt = file.name.split('.').pop()?.toLowerCase();
 
-    // 處理 Excel (.xlsx, .xls)
     if (fileExt === 'xlsx' || fileExt === 'xls') {
       const reader = new FileReader();
       reader.onload = (evt) => {
         const bstr = evt.target?.result;
         const wb = XLSX.read(bstr, { type: 'binary' });
-        const wsname = wb.SheetNames[0]; // 讀取第一個工作表
+        const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
         const jsonData = XLSX.utils.sheet_to_json(ws);
-
         const processed = processImportedData(jsonData);
         if (processed.length > 0) {
           setRawData(processed);
           setIsUsingMock(false);
-          alert(`成功從 Excel 載入 ${processed.length} 筆資料！`);
-        } else {
-          alert('Excel 讀取失敗或無有效資料，請確認欄位名稱。');
+          alert(`成功載入 ${processed.length} 筆資料！`);
         }
       };
       reader.readAsBinaryString(file);
     }
-    // 處理 CSV
     else if (fileExt === 'csv') {
       Papa.parse(file, {
         header: true,
@@ -215,19 +224,172 @@ export default function StudifyPlatform() {
           if (processed.length > 0) {
             setRawData(processed);
             setIsUsingMock(false);
-            alert(`成功從 CSV 載入 ${processed.length} 筆資料！`);
-          } else {
-            alert('CSV 讀取失敗或無有效資料。');
+            alert(`成功載入 ${processed.length} 筆資料！`);
           }
-        },
-        error: (error) => alert(`CSV 解析錯誤: ${error.message}`)
+        }
       });
-    } else {
-      alert('不支援的檔案格式，請上傳 .csv 或 .xlsx 檔案');
     }
-
-    // 重置 input
     e.target.value = '';
+  };
+
+  // --- 頁面內容渲染邏輯 ---
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'dashboard':
+        return (
+          <div className="space-y-8 animate-in fade-in duration-500">
+            {/* KPI Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <StatCard title="學生總數" value={kpi.totalStudents.toLocaleString()} subtext="Students" icon={Users} colorClass="bg-blue-50 text-blue-600" />
+              <StatCard title="平均進步分數" value={`+${kpi.avgImprovement}`} subtext="Points" icon={TrendingUp} colorClass="bg-emerald-50 text-emerald-600" />
+              <StatCard title="平均使用分鐘" value={`${kpi.avgUsageTime} min`} subtext="Avg Duration" icon={FileSpreadsheet} colorClass="bg-violet-50 text-violet-600" />
+              <StatCard title="學習退步警示" value={kpi.highRiskCount} subtext="Attention Needed" icon={AlertTriangle} colorClass="bg-rose-50 text-rose-600" />
+            </div>
+
+            {/* Charts Area */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 h-[500px]">
+              <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col">
+                <div className="mb-6"><h3 className="text-lg font-bold text-slate-800">各校平均進步幅度</h3></div>
+                <div className="flex-1 min-h-0">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={chartData.bar}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} />
+                      <YAxis axisLine={false} tickLine={false} />
+                      <Tooltip />
+                      <Bar dataKey="平均進步" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col">
+                <div className="mb-2">
+                   <h3 className="text-lg font-bold text-slate-800">使用時間 vs 成績變化</h3>
+                   <p className="text-xs text-slate-400">觀察投入時間與成效的關聯</p>
+                </div>
+                <div className="flex-1 min-h-0">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis type="number" dataKey="x" name="使用分鐘" unit="min" />
+                      <YAxis type="number" dataKey="y" name="進步分數" unit="分" />
+                      <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                      <Scatter name="學生" data={chartData.scatter} fill="#8b5cf6" fillOpacity={0.6} />
+                    </ScatterChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'analysis':
+        return (
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-xl shadow-slate-200/50 overflow-hidden animate-in fade-in duration-500">
+             <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-800">詳細學生數據列表</h3>
+                  <p className="text-sm text-slate-500 mt-1">檢視所有原始數據與個別指標</p>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-xs font-mono text-slate-500 bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm">
+                     顯示筆數: {filteredData.length}
+                  </span>
+                </div>
+             </div>
+             <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                   <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                      <tr>
+                         <th className="px-6 py-4 whitespace-nowrap">學校</th>
+                         <th className="px-6 py-4 whitespace-nowrap">姓名/代號</th>
+                         <th className="px-6 py-4 whitespace-nowrap">科目</th>
+                         <th className="px-6 py-4 text-right">前測</th>
+                         <th className="px-6 py-4 text-right">後測</th>
+                         <th className="px-6 py-4 text-right">進步</th>
+                         <th className="px-6 py-4 text-right">使用時數 (原始)</th>
+                         <th className="px-6 py-4 text-right">換算分鐘</th>
+                      </tr>
+                   </thead>
+                   <tbody className="divide-y divide-slate-100">
+                      {filteredData.slice(0, 50).map((d, i) => ( // 限制顯示 50 筆避免卡頓
+                         <tr key={i} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="px-6 py-4 font-medium text-slate-700">{d.學校名稱}</td>
+                            <td className="px-6 py-4 text-slate-500">{d.姓名}</td>
+                            <td className="px-6 py-4"><span className="px-2 py-1 rounded bg-slate-100 text-slate-600 text-xs">{d.科目}</span></td>
+                            <td className="px-6 py-4 text-right text-slate-500">{d.前測成績}</td>
+                            <td className="px-6 py-4 text-right font-bold text-slate-700">{d.後測成績}</td>
+                            <td className="px-6 py-4 text-right">
+                               <span className={`${d.前後側差異 > 0 ? 'text-emerald-600' : 'text-rose-500'} font-bold`}>
+                                 {d.前後側差異 > 0 ? '+' : ''}{d.前後側差異}
+                               </span>
+                            </td>
+                            <td className="px-6 py-4 text-right text-slate-400 font-mono text-xs">{d.使用總時數}</td>
+                            <td className="px-6 py-4 text-right text-slate-600 font-mono">{parseTime(d.使用總時數)} min</td>
+                         </tr>
+                      ))}
+                   </tbody>
+                </table>
+                {filteredData.length > 50 && (
+                  <div className="p-4 text-center text-slate-400 text-xs border-t border-slate-100">
+                    僅顯示前 50 筆資料，請使用篩選器縮小範圍
+                  </div>
+                )}
+             </div>
+          </div>
+        );
+
+      case 'settings':
+        return (
+          <div className="max-w-2xl mx-auto space-y-6 animate-in fade-in duration-500">
+            <div className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm">
+              <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center gap-2">
+                <Settings className="text-slate-600" />
+                系統設定
+              </h2>
+
+              <div className="space-y-6">
+                <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
+                  <h4 className="font-bold text-blue-900 flex items-center gap-2 mb-2">
+                    <Info size={18} />
+                    關於本系統
+                  </h4>
+                  <p className="text-sm text-blue-700 leading-relaxed">
+                    Studify AI 是一個專為教育現場設計的數據分析平台。
+                    支援上傳 .csv 或 .xlsx 格式的學習紀錄，並透過前端運算即時產生視覺化報表。
+                    目前版本：v1.2.0 (Local Preview)
+                  </p>
+                </div>
+
+                <div className="pt-6 border-t border-slate-100">
+                  <h4 className="font-bold text-slate-700 mb-4">資料管理</h4>
+                  <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">
+                    <div>
+                      <div className="font-medium text-slate-900">清除所有數據</div>
+                      <div className="text-xs text-slate-500">將目前的數據清空並恢復為預設範例資料</div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if(confirm('確定要清除目前上傳的資料並恢復預設嗎？')) {
+                          setRawData(MOCK_DATA);
+                          setIsUsingMock(true);
+                        }
+                      }}
+                      className="px-4 py-2 bg-white border border-rose-200 text-rose-600 rounded-lg hover:bg-rose-50 font-medium text-sm flex items-center gap-2 transition-colors"
+                    >
+                      <Trash2 size={16} />
+                      重置資料
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+
+      default:
+        return <div>頁面建置中...</div>;
+    }
   };
 
   return (
@@ -241,21 +403,24 @@ export default function StudifyPlatform() {
         </div>
 
         <nav className="flex-1 py-6 px-4 space-y-2 overflow-y-auto">
-          {['dashboard', 'analysis', 'settings'].map(tab => (
+          {/* Menu Items */}
+          {[
+            { id: 'dashboard', label: '總覽儀表板', icon: LayoutDashboard },
+            { id: 'analysis', label: '詳細數據列表', icon: FileSpreadsheet },
+            { id: 'settings', label: '系統設定', icon: Settings }
+          ].map(item => (
             <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`w-full flex items-center px-4 py-3 rounded-xl transition-all duration-200 group ${activeTab === tab ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+              key={item.id}
+              onClick={() => setActiveTab(item.id)}
+              className={`w-full flex items-center px-4 py-3 rounded-xl transition-all duration-200 group ${activeTab === item.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
             >
-              {tab === 'dashboard' && <LayoutDashboard size={20} />}
-              {tab === 'analysis' && <TrendingUp size={20} />}
-              {tab === 'settings' && <FileSpreadsheet size={20} />}
-              {isSidebarOpen && <span className="ml-3 font-medium capitalize">{tab}</span>}
-              {activeTab === tab && isSidebarOpen && <ChevronRight className="ml-auto opacity-50" size={16} />}
+              <item.icon size={20} />
+              {isSidebarOpen && <span className="ml-3 font-medium">{item.label}</span>}
+              {activeTab === item.id && isSidebarOpen && <ChevronRight className="ml-auto opacity-50" size={16} />}
             </button>
           ))}
 
-          {/* 側邊欄篩選器與上傳區 */}
+          {/* Interactive Filters */}
           {isSidebarOpen && (
             <div className="mt-8 pt-6 border-t border-slate-700">
               <div className="flex items-center gap-2 mb-4 text-emerald-400 px-2">
@@ -341,10 +506,9 @@ export default function StudifyPlatform() {
           </div>
         </header>
 
-        {/* Dynamic Content */}
+        {/* Dynamic Content Area - Switch based on renderContent */}
         <div className="p-8 max-w-[1600px] mx-auto space-y-8">
 
-          {/* Header Title */}
           <div className="flex justify-between items-end">
             <div>
               <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">數位學習成效分析</h1>
@@ -359,141 +523,7 @@ export default function StudifyPlatform() {
             </button>
           </div>
 
-          {/* KPI Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <StatCard
-              title="篩選後學生總數"
-              value={kpi.totalStudents.toLocaleString()}
-              subtext="Students"
-              icon={Users}
-              colorClass="bg-blue-50 text-blue-600"
-            />
-            <StatCard
-              title="平均進步分數"
-              value={`+${kpi.avgImprovement}`}
-              subtext="Points"
-              icon={TrendingUp}
-              colorClass="bg-emerald-50 text-emerald-600"
-            />
-            <StatCard
-              title="平均使用分鐘"
-              value={`${kpi.avgUsageTime} min`}
-              subtext="Duration"
-              icon={FileSpreadsheet}
-              colorClass="bg-violet-50 text-violet-600"
-            />
-            <StatCard
-              title="學習退步警示"
-              value={kpi.highRiskCount}
-              subtext="Needs Help"
-              icon={AlertTriangle}
-              colorClass="bg-rose-50 text-rose-600"
-            />
-          </div>
-
-          {/* Main Chart Area */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 h-[500px]">
-
-            {/* Left: Bar Chart */}
-            <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col">
-              <div className="mb-6 flex justify-between items-center">
-                 <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                   <BarChart3 className="text-blue-500" size={20} />
-                   各校平均進步幅度比較
-                 </h3>
-              </div>
-              <div className="flex-1 min-h-0">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData.bar}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="name" tick={{fill: '#64748b', fontSize: 12}} axisLine={false} tickLine={false} />
-                    <YAxis tick={{fill: '#64748b', fontSize: 12}} axisLine={false} tickLine={false} />
-                    <Tooltip
-                      cursor={{fill: '#f8fafc'}}
-                      contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}}
-                    />
-                    <Bar dataKey="平均進步" fill="#3b82f6" radius={[6, 6, 0, 0]} barSize={40} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* Right: Scatter Chart */}
-            <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col">
-              <div className="mb-2">
-                 <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                   <BrainCircuit className="text-violet-500" size={20} />
-                   使用時間 vs 成績變化
-                 </h3>
-                 <p className="text-xs text-slate-400 mt-1">分析：投入時間是否正向影響成績？</p>
-              </div>
-              <div className="flex-1 min-h-0 relative">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis type="number" dataKey="x" name="使用分鐘" unit="min" tick={{fontSize: 10}} />
-                    <YAxis type="number" dataKey="y" name="進步分數" unit="分" tick={{fontSize: 10}} />
-                    <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{borderRadius: '8px'}} />
-                    <Scatter name="學生" data={chartData.scatter} fill="#8b5cf6" fillOpacity={0.6} />
-                  </ScatterChart>
-                </ResponsiveContainer>
-
-                {/* 浮動的 Insight Card */}
-                <div className="absolute bottom-4 right-4 bg-white/90 backdrop-blur border border-slate-200 p-3 rounded-lg shadow-lg max-w-[200px]">
-                   <p className="text-xs text-slate-600 leading-relaxed">
-                     <span className="font-bold text-violet-600">AI 發現：</span>
-                     數據顯示，當使用時間超過 60 分鐘後，成績提升幅度趨緩 (邊際效應遞減)。
-                   </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Bottom List Area */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-xl shadow-slate-200/50 overflow-hidden">
-             <div className="p-6 border-b border-slate-50 flex justify-between items-center">
-                <h3 className="text-lg font-bold text-slate-800">詳細學生數據列表</h3>
-                <span className="text-xs font-mono text-slate-400 bg-slate-50 px-2 py-1 rounded">
-                   顯示前 10 筆 / 共 {filteredData.length} 筆
-                </span>
-             </div>
-             <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                   <thead className="bg-slate-50 text-slate-500 font-medium">
-                      <tr>
-                         <th className="px-6 py-4">學校</th>
-                         <th className="px-6 py-4">姓名/代號</th>
-                         <th className="px-6 py-4">科目</th>
-                         <th className="px-6 py-4 text-right">前測</th>
-                         <th className="px-6 py-4 text-right">後測</th>
-                         <th className="px-6 py-4 text-right">進步</th>
-                         <th className="px-6 py-4 text-right">使用時數</th>
-                      </tr>
-                   </thead>
-                   <tbody className="divide-y divide-slate-50">
-                      {filteredData.slice(0, 10).map((d, i) => (
-                         <tr key={i} className="hover:bg-slate-50/80 transition-colors group">
-                            <td className="px-6 py-4 font-medium text-slate-700">{d.學校名稱}</td>
-                            <td className="px-6 py-4 text-slate-500">{d.姓名}</td>
-                            <td className="px-6 py-4">
-                               <span className="px-2 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600 group-hover:bg-white group-hover:shadow-sm transition-all border border-transparent group-hover:border-slate-200">
-                                 {d.科目 || '無資料'}
-                               </span>
-                            </td>
-                            <td className="px-6 py-4 text-right text-slate-500">{d.前測成績}</td>
-                            <td className="px-6 py-4 text-right font-bold text-slate-700">{d.後測成績}</td>
-                            <td className="px-6 py-4 text-right">
-                               <span className={`${d.前後側差異 > 0 ? 'text-emerald-600' : 'text-rose-500'} font-bold`}>
-                                 {d.前後側差異 > 0 ? '+' : ''}{d.前後側差異}
-                               </span>
-                            </td>
-                            <td className="px-6 py-4 text-right text-slate-500 font-mono">{d.使用總時數}</td>
-                         </tr>
-                      ))}
-                   </tbody>
-                </table>
-             </div>
-          </div>
+          {renderContent()}
 
         </div>
       </main>
