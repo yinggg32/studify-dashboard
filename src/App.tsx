@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
+import Papa from 'papaparse';
 import {
   LayoutDashboard,
   Users,
@@ -8,13 +9,15 @@ import {
   Search,
   ChevronRight,
   AlertTriangle,
+  UploadCloud,
   FileSpreadsheet,
-  RefreshCw,
   TrendingUp,
   Share2,
   X,
   Copy,
-  Check
+  Check,
+  Filter,
+  Download
 } from 'lucide-react';
 import {
   BarChart,
@@ -26,103 +29,72 @@ import {
   ResponsiveContainer,
   ScatterChart,
   Scatter,
-  Legend
+  Legend,
+  PieChart,
+  Pie,
+  Cell
 } from 'recharts';
 
-// --- 模擬數據 (基於您的 113 學年度分析結果) ---
+// --- 型別定義 ---
+interface StudentData {
+  學校名稱: string;
+  年級: string;
+  科目: string;
+  前測成績: number;
+  後測成績: number;
+  使用總時數: string; // 格式如 "25:12:26"
+  任務完成: number;
+  練習題測驗: number;
+  前後側差異: number;
+  姓名?: string;
+}
 
-// 1. 任務完成度與進步幅度 (Bar Chart)
-const taskCompletionData = [
-  { name: '低任務完成群', 進步幅度: 2.1, color: '#94a3b8' },
-  { name: '中任務完成群', 進步幅度: 8.2, color: '#0ea5e9' },
-  { name: '高任務完成群', 進步幅度: 18.5, color: '#2563eb' },
-];
+// --- 輔助函數 ---
+const parseTime = (timeStr: string) => {
+  if (!timeStr) return 0;
+  const parts = timeStr.split(':');
+  if (parts.length !== 3) return 0;
+  return parseInt(parts[0]) * 60 + parseInt(parts[1]); // 轉為分鐘
+};
 
-// 2. XGBoost 預測模型散佈圖 (Scatter Chart)
-const predictionData = Array.from({ length: 50 }, (_, i) => {
-  const actual = Math.floor(Math.random() * 40) + 60; // 60-100
-  const error = (Math.random() - 0.5) * 5;
+// 預設範例資料 (當還沒上傳時顯示)
+const MOCK_DATA: StudentData[] = Array.from({ length: 100 }, (_, i) => {
+  const pre = Math.floor(Math.random() * 40) + 40;
+  const post = Math.min(100, pre + Math.floor(Math.random() * 30));
   return {
-    id: i,
-    actual: actual,
-    predicted: parseFloat((actual + error).toFixed(1)),
-    cluster: actual > 85 ? 'High' : 'Normal'
+    學校名稱: i % 3 === 0 ? '恆春國小' : i % 3 === 1 ? '車城國小' : '滿州國中',
+    年級: i % 2 === 0 ? '五年級' : '六年級',
+    科目: i % 2 === 0 ? '數學' : '自然',
+    前測成績: pre,
+    後測成績: post,
+    前後側差異: post - pre,
+    使用總時數: `${Math.floor(Math.random() * 50)}:${Math.floor(Math.random() * 60)}:00`,
+    任務完成: Math.floor(Math.random() * 20),
+    練習題測驗: Math.floor(Math.random() * 50),
+    姓名: `學生${i + 1}`
   };
 });
 
-// 3. 學生預警名單 (List)
-const studentList = [
-  { id: 'S11301', name: '陳小明', school: '恆春國小', riskLevel: 'High', avgTime: 450, completion: 15, predictedScore: 58, warning: '只登入未練習 (無效學習)' },
-  { id: 'S11302', name: '林小華', school: '車城國小', riskLevel: 'Low', avgTime: 320, completion: 92, predictedScore: 88, warning: '狀況良好' },
-  { id: 'S11303', name: '張大安', school: '滿州國中', riskLevel: 'Medium', avgTime: 120, completion: 45, predictedScore: 65, warning: '投入時間不足' },
-  { id: 'S11304', name: '李美美', school: '高樹國小', riskLevel: 'High', avgTime: 600, completion: 20, predictedScore: 61, warning: '無效掛機' },
-  { id: 'S11305', name: '王力', school: '里港國小', riskLevel: 'Low', avgTime: 400, completion: 88, predictedScore: 91, warning: '狀況良好' },
-];
-
 // --- 組件 ---
 
-const StatCard = ({ title, value, subtext, icon: Icon, trend }: any) => (
-  <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+const StatCard = ({ title, value, subtext, icon: Icon, colorClass }: any) => (
+  <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all duration-300">
     <div className="flex justify-between items-start">
       <div>
         <p className="text-slate-500 text-sm font-medium mb-1">{title}</p>
         <h3 className="text-3xl font-bold text-slate-800">{value}</h3>
       </div>
-      <div className={`p-3 rounded-lg ${trend === 'down' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+      <div className={`p-3 rounded-lg ${colorClass}`}>
         <Icon size={24} />
       </div>
     </div>
     <div className="mt-4 flex items-center text-sm">
-      <span className={trend === 'down' ? 'text-red-500 font-medium' : 'text-emerald-500 font-medium'}>
+      <span className="text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full">
         {subtext}
       </span>
-      <span className="text-slate-400 ml-2">與上學期相比</span>
     </div>
   </div>
 );
-
-const RiskBadge = ({ level }: { level: string }) => {
-  const styles: any = {
-    High: 'bg-red-100 text-red-700 border-red-200',
-    Medium: 'bg-amber-100 text-amber-700 border-amber-200',
-    Low: 'bg-emerald-100 text-emerald-700 border-emerald-200',
-  };
-  return (
-    <span className={`px-3 py-1 rounded-full text-xs font-bold border ${styles[level]}`}>
-      {level === 'High' ? '高風險需介入' : level === 'Medium' ? '觀察中' : '狀況良好'}
-    </span>
-  );
-};
-
-// --- 熱力圖與互動分析組件 ---
-
-// 模擬相關性矩陣數據 (基於 CSV 欄位)
-const correlationMatrix = [
-  { factor: '前測成績', values: [1, 0.65, 0.12, 0.35, -0.2] },
-  { factor: '後測成績', values: [0.65, 1, 0.05, 0.82, 0.6] },
-  { factor: '使用總時數', values: [0.12, 0.05, 1, 0.15, -0.05] }, // 注意這裡：時間與成績相關性低
-  { factor: '任務完成數', values: [0.35, 0.82, 0.15, 1, 0.75] },
-  { factor: '練習題測驗', values: [-0.2, 0.6, -0.05, 0.75, 1] },
-];
-const factors = ['前測成績', '後測成績', '使用總時數', '任務完成數', '練習題測驗'];
-
-// 顏色映射函數
-const getColor = (value: number) => {
-  if (value === 1) return 'bg-slate-100 text-slate-400'; // 自己對自己
-  if (value > 0.7) return 'bg-blue-600 text-white';
-  if (value > 0.4) return 'bg-blue-400 text-white';
-  if (value > 0.2) return 'bg-blue-200 text-blue-800';
-  if (value > -0.1 && value < 0.1) return 'bg-slate-50 text-slate-400'; // 無相關
-  return 'bg-red-100 text-red-700'; // 負相關或低相關
-};
-
-// 模擬 CSV 散佈圖數據 (時間 vs 進步分數)
-const scatterDataTimeVsImprovement = Array.from({ length: 60 }, () => ({
-  x: Math.floor(Math.random() * 600) + 10, // 分鐘
-  y: Math.floor(Math.random() * 30) - 5,   // 進步分數
-  cluster: 'student'
-}));
-
 
 // --- 主程式 ---
 
@@ -130,302 +102,100 @@ export default function StudifyPlatform() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
-  // Analysis Tab States
-  const [analysisState, setAnalysisState] = useState<'idle' | 'processing' | 'done'>('idle');
-  const [csvInput, setCsvInput] = useState('');
+  // 資料狀態
+  const [rawData, setRawData] = useState<StudentData[]>(MOCK_DATA);
+  const [isUsingMock, setIsUsingMock] = useState(true);
 
-  // Share Modal States
-  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
-  const [isCopied, setIsCopied] = useState(false);
+  // 篩選器狀態
+  const [selectedSchool, setSelectedSchool] = useState<string>('All');
+  const [selectedSubject, setSelectedSubject] = useState<string>('All');
 
-  const handleAnalyze = () => {
-    setAnalysisState('processing');
-    // 模擬處理時間
-    setTimeout(() => {
-      setAnalysisState('done');
-    }, 1500);
-  };
+  // --- 資料處理邏輯 (useMemo 優化效能) ---
 
-  const handleCopyLink = () => {
-    setIsCopied(true);
-    // 模擬複製行為
-    setTimeout(() => setIsCopied(false), 2000);
-  };
+  // 1. 取得所有學校和科目的選項
+  const schools = useMemo(() => ['All', ...new Set(rawData.map(d => d.學校名稱))], [rawData]);
+  const subjects = useMemo(() => ['All', ...new Set(rawData.map(d => d.科目 || '數學'))], [rawData]); // 預設數學防止空值
 
-  const renderContent = () => {
-    switch (activeTab) {
-      case 'dashboard':
-        return (
-          <div className="space-y-6 animate-in fade-in duration-500">
-            {/* KPI Section */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <StatCard title="分析學生總數" value="4,865" subtext="+12%" icon={Users} trend="up" />
-              <StatCard title="高風險預警人數" value="342" subtext="+5.4%" icon={AlertTriangle} trend="down" />
-              <StatCard title="預測準確度 (R²)" value="0.985" subtext="極高可信度" icon={BrainCircuit} trend="up" />
-            </div>
+  // 2. 根據篩選器過濾資料
+  const filteredData = useMemo(() => {
+    return rawData.filter(d => {
+      const matchSchool = selectedSchool === 'All' || d.學校名稱 === selectedSchool;
+      // 簡單處理科目可能為 undefined 的情況
+      const subject = d.科目 || '數學';
+      const matchSubject = selectedSubject === 'All' || subject === selectedSubject;
+      return matchSchool && matchSubject;
+    });
+  }, [rawData, selectedSchool, selectedSubject]);
 
-            {/* Main Charts Row */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  // 3. 計算 KPI
+  const kpi = useMemo(() => {
+    const totalStudents = filteredData.length;
+    const avgImprovement = filteredData.reduce((acc, cur) => acc + (cur.後測成績 - cur.前測成績), 0) / (totalStudents || 1);
+    const highRiskCount = filteredData.filter(d => (d.後測成績 - d.前測成績) < 0).length; // 退步的人
+    const avgUsageTime = filteredData.reduce((acc, cur) => acc + parseTime(cur.使用總時數), 0) / (totalStudents || 1);
 
-              {/* Chart 1: Task Completion */}
-              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                <div className="flex justify-between items-center mb-6">
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-800">任務完成度 vs. 成效提升</h3>
-                    <p className="text-sm text-slate-500">驗證發現：完成度比使用時間更重要</p>
-                  </div>
-                  <div className="p-2 bg-blue-50 rounded-lg">
-                    <BarChart3 size={20} className="text-blue-600" />
-                  </div>
-                </div>
-                <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={taskCompletionData} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                      <XAxis type="number" domain={[0, 20]} />
-                      <YAxis dataKey="name" type="category" width={100} tick={{fontSize: 12}} />
-                      <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
-                      <Bar dataKey="進步幅度" fill="#2563eb" radius={[0, 4, 4, 0]} barSize={30} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
+    return {
+      totalStudents,
+      avgImprovement: avgImprovement.toFixed(1),
+      highRiskCount,
+      avgUsageTime: Math.round(avgUsageTime)
+    };
+  }, [filteredData]);
 
-              {/* Chart 2: XGBoost Prediction */}
-              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                <div className="flex justify-between items-center mb-6">
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-800">XGBoost 成效預測模型</h3>
-                    <p className="text-sm text-slate-500">實際分數 vs. 模型預測分數 (MAE: 1.15)</p>
-                  </div>
-                  <div className="p-2 bg-purple-50 rounded-lg">
-                    <BrainCircuit size={20} className="text-purple-600" />
-                  </div>
-                </div>
-                <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                      <CartesianGrid />
-                      <XAxis type="number" dataKey="actual" name="實際分數" unit="分" domain={[60, 100]} />
-                      <YAxis type="number" dataKey="predicted" name="預測分數" unit="分" domain={[60, 100]} />
-                      <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                      <Scatter name="學生" data={predictionData} fill="#8884d8" />
-                    </ScatterChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </div>
+  // 4. 準備圖表資料
+  const chartData = useMemo(() => {
+    // 散佈圖資料 (時間 vs 進步)
+    const scatter = filteredData.map((d, i) => ({
+      x: parseTime(d.使用總時數),
+      y: d.後測成績 - d.前測成績,
+      z: d.後測成績, // 氣泡大小可以用後測成績
+      name: d.姓名 || `S${i}`,
+      school: d.學校名稱
+    })).slice(0, 100); // 限制點數避免過慢
 
-            {/* Feature Importance Panel (SHAP Summary Simplified) */}
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-              <h3 className="text-lg font-bold text-slate-800 mb-4">影響成效的關鍵行為 (SHAP Feature Importance)</h3>
-              <div className="space-y-4">
-                <div className="flex items-center">
-                  <div className="w-32 text-sm font-medium text-slate-600">練習題測驗</div>
-                  <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden mx-4">
-                    <div className="h-full bg-blue-600 w-[95%] rounded-full"></div>
-                  </div>
-                  <div className="w-12 text-sm text-slate-500 font-bold">1st</div>
-                </div>
-                <div className="flex items-center">
-                  <div className="w-32 text-sm font-medium text-slate-600">任務完成度</div>
-                  <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden mx-4">
-                    <div className="h-full bg-blue-500 w-[85%] rounded-full"></div>
-                  </div>
-                  <div className="w-12 text-sm text-slate-500 font-bold">2nd</div>
-                </div>
-                <div className="flex items-center opacity-50">
-                  <div className="w-32 text-sm font-medium text-slate-600">使用總時數</div>
-                  <div className="flex-1 h-3 bg-slate-100 rounded-full overflow-hidden mx-4">
-                    <div className="h-full bg-slate-400 w-[20%] rounded-full"></div>
-                  </div>
-                  <div className="w-12 text-sm text-slate-500 font-bold">Low</div>
-                </div>
-              </div>
-              <div className="mt-4 p-3 bg-yellow-50 text-yellow-800 text-sm rounded-lg flex items-start gap-2 border border-yellow-100">
-                <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-                <p>系統提示：數據顯示單純增加使用時數對成績幫助有限 (SHAP值低)，建議教師優先引導學生提升「練習頻率」與「任務完成度」。</p>
-              </div>
-            </div>
-          </div>
-        );
+    // 長條圖資料 (各校平均進步)
+    const schoolImprovement: Record<string, { total: number, count: number }> = {};
+    filteredData.forEach(d => {
+      if (!schoolImprovement[d.學校名稱]) schoolImprovement[d.學校名稱] = { total: 0, count: 0 };
+      schoolImprovement[d.學校名稱].total += (d.後測成績 - d.前測成績);
+      schoolImprovement[d.學校名稱].count += 1;
+    });
+    const bar = Object.keys(schoolImprovement).map(school => ({
+      name: school,
+      平均進步: parseFloat((schoolImprovement[school].total / schoolImprovement[school].count).toFixed(1))
+    }));
 
-      case 'students':
-        return (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-              <div>
-                <h3 className="text-lg font-bold text-slate-800">學生預警名單</h3>
-                <p className="text-sm text-slate-500">基於行為數據的即時風險評估 (Actionable List)</p>
-              </div>
-              <button className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 shadow-sm">匯出名單</button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm text-slate-600">
-                <thead className="bg-slate-50 text-slate-900 font-semibold border-b border-slate-200">
-                  <tr>
-                    <th className="px-6 py-4">學號 / 姓名</th>
-                    <th className="px-6 py-4">學校</th>
-                    <th className="px-6 py-4">預測學期成績</th>
-                    <th className="px-6 py-4">行為指標</th>
-                    <th className="px-6 py-4">風險等級</th>
-                    <th className="px-6 py-4">系統診斷</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {studentList.map((student) => (
-                    <tr key={student.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-slate-900">{student.name}</div>
-                        <div className="text-xs text-slate-400">{student.id}</div>
-                      </td>
-                      <td className="px-6 py-4">{student.school}</td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-800">{student.predictedScore}</span>
-                          {student.predictedScore < 60 && <AlertTriangle size={14} className="text-red-500" />}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="space-y-1">
-                          <div className="flex justify-between text-xs gap-4">
-                            <span>時數:</span>
-                            <span className="font-medium">{student.avgTime} min</span>
-                          </div>
-                          <div className="flex justify-between text-xs gap-4">
-                            <span>任務:</span>
-                            <span className={`font-medium ${student.completion < 30 ? 'text-red-500' : 'text-slate-700'}`}>{student.completion}%</span>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <RiskBadge level={student.riskLevel} />
-                      </td>
-                      <td className="px-6 py-4 text-slate-500 font-medium">
-                        {student.warning}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
+    return { scatter, bar };
+  }, [filteredData]);
 
-      case 'analysis':
-        return (
-          <div className="space-y-6 animate-in fade-in duration-500">
-            {/* 1. 資料上傳區 */}
-            <div className="bg-white p-8 rounded-xl border border-slate-200 shadow-sm">
-               <h2 className="text-2xl font-bold text-slate-800 mb-2">深度數據分析工具</h2>
-               <p className="text-slate-500 mb-6">請貼上您的班級數據 CSV (包含：前測成績, 後測成績, 使用總時數, 任務完成...)，系統將自動生成關聯分析。</p>
+  // --- 檔案上傳處理 ---
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      Papa.parse(file, {
+        header: true,
+        complete: (results) => {
+          // 轉換 CSV 欄位名稱並過濾無效資料
+          const parsedData = results.data
+            .filter((row: any) => row['前測成績'] && row['後測成績']) // 確保有成績
+            .map((row: any) => ({
+              學校名稱: row['學校名稱'] || '未知學校',
+              年級: row['年級'] || '未知',
+              科目: row['本表單施測科目領域'] || '一般', // 對應您的 CSV
+              前測成績: parseFloat(row['前測成績']),
+              後測成績: parseFloat(row['後測成績']),
+              前後側差異: parseFloat(row['後測成績']) - parseFloat(row['前測成績']),
+              使用總時數: row['使用總時數'] || '00:00:00',
+              任務完成: parseInt(row['任務完成'] || '0'),
+              練習題測驗: parseInt(row['練習題測驗'] || '0'),
+              姓名: row['實施教師姓名'] ? `學生(${row['實施教師姓名']}班)` : '學生'
+            }));
 
-               <div className="flex flex-col md:flex-row gap-6">
-                 <div className="flex-1">
-                    <textarea
-                      className="w-full h-40 p-4 rounded-lg border border-slate-300 font-mono text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                      placeholder="學校名稱,姓名,前測成績,後測成績,使用總時數,任務完成... (可直接將 Excel/CSV 內容貼於此處)"
-                      value={csvInput}
-                      onChange={(e) => setCsvInput(e.target.value)}
-                    ></textarea>
-                 </div>
-                 <div className="w-full md:w-64 flex flex-col gap-3">
-                    <button
-                      onClick={() => setCsvInput('學校名稱,前測成績,後測成績,使用總時數\n範例數據A,80,85,120\n範例數據B,60,65,500...')}
-                      className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-colors font-medium"
-                    >
-                      <FileSpreadsheet size={18} />
-                      載入範例數據
-                    </button>
-                    <button
-                      onClick={handleAnalyze}
-                      disabled={analysisState === 'processing'}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-bold shadow-md disabled:opacity-50"
-                    >
-                      {analysisState === 'processing' ? <RefreshCw className="animate-spin" /> : <TrendingUp />}
-                      {analysisState === 'processing' ? '正在運算...' : '開始分析'}
-                    </button>
-                 </div>
-               </div>
-            </div>
-
-            {/* 2. 分析結果顯示區 (條件渲染) */}
-            {analysisState === 'done' && (
-              <div className="space-y-6 animate-in slide-in-from-bottom-8 duration-700">
-
-                {/* 2.1 關鍵發現提示 */}
-                <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl flex gap-4 items-start">
-                   <div className="bg-indigo-100 p-2 rounded-lg">
-                      <BrainCircuit className="text-indigo-600" size={24} />
-                   </div>
-                   <div>
-                      <h4 className="font-bold text-indigo-900 text-lg">AI 數據洞察：時間投入不等於成效</h4>
-                      <p className="text-indigo-700 mt-1 text-sm leading-relaxed">
-                        根據您上傳的 113 學年度數據分析，我們發現 <span className="font-bold underline">「使用總時數」與「後測成績」的相關係數僅為 0.05 (極低相關)</span>。
-                        反之，「任務完成數」與「練習題測驗」與成績進步呈現高度正相關 (r &gt; 0.7)。建議教學策略從「增加使用時間」轉向「提高任務完成率」。
-                      </p>
-                   </div>
-                </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* 2.2 相關性熱力圖 (Custom Grid) */}
-                  <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex flex-col">
-                    <h3 className="text-lg font-bold text-slate-800 mb-6">多變項相關性矩陣 (Correlation Heatmap)</h3>
-                    <div className="flex-1 flex items-center justify-center">
-                       <div className="grid grid-cols-6 gap-1 w-full max-w-md text-xs">
-                          {/* Header Row */}
-                          <div className="col-span-1"></div>
-                          {factors.map((f, i) => (
-                            <div key={i} className="font-bold text-slate-500 text-center rotate-45 origin-bottom-left translate-x-2 -translate-y-2">{f.substring(0,4)}</div>
-                          ))}
-
-                          {/* Matrix Rows */}
-                          {correlationMatrix.map((row, i) => (
-                            <React.Fragment key={i}>
-                              <div className="font-bold text-slate-600 flex items-center justify-end pr-2">{row.factor}</div>
-                              {row.values.map((val, j) => (
-                                <div
-                                  key={j}
-                                  className={`h-12 flex items-center justify-center rounded transition-all hover:scale-105 cursor-pointer ${getColor(val)}`}
-                                  title={`${row.factor} vs ${factors[j]}: ${val}`}
-                                >
-                                  {val}
-                                </div>
-                              ))}
-                            </React.Fragment>
-                          ))}
-                       </div>
-                    </div>
-                  </div>
-
-                  {/* 2.3 散佈圖驗證 (Scatter) */}
-                  <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                    <h3 className="text-lg font-bold text-slate-800 mb-2">使用時間 vs 進步分數</h3>
-                    <p className="text-sm text-slate-400 mb-6">每個點代表一位學生，觀察分佈是否集中於對角線</p>
-                    <div className="h-80">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                          <CartesianGrid />
-                          <XAxis type="number" dataKey="x" name="使用時間" unit="分" />
-                          <YAxis type="number" dataKey="y" name="進步分數" unit="分" />
-                          <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                          <Legend />
-                          <Scatter name="學生數據分佈" data={scatterDataTimeVsImprovement} fill="#8884d8">
-                            {/* 模擬離散分佈，顯示無相關性 */}
-                          </Scatter>
-                          {/* 趨勢線 (模擬平緩線) */}
-                        </ScatterChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )
-
-      default:
-        return <div>開發中...</div>;
+          setRawData(parsedData);
+          setIsUsingMock(false);
+          alert(`成功載入 ${parsedData.length} 筆學生資料！`);
+        }
+      });
     }
   };
 
@@ -433,164 +203,270 @@ export default function StudifyPlatform() {
     <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900">
 
       {/* Sidebar */}
-      <aside className={`${isSidebarOpen ? 'w-64' : 'w-20'} bg-slate-900 text-white transition-all duration-300 flex flex-col fixed h-full z-20`}>
-        <div className="h-16 flex items-center px-6 border-b border-slate-800">
-          <BrainCircuit className="text-blue-400 mr-3" size={28} />
-          {isSidebarOpen && <span className="text-xl font-bold tracking-tight">Studify</span>}
+      <aside className={`${isSidebarOpen ? 'w-72' : 'w-20'} bg-slate-900 text-white transition-all duration-300 flex flex-col fixed h-full z-20 shadow-2xl`}>
+        <div className="h-16 flex items-center px-6 border-b border-slate-800 bg-slate-950">
+          <BrainCircuit className="text-emerald-400 mr-3 shrink-0" size={28} />
+          {isSidebarOpen && <span className="text-xl font-bold tracking-tight bg-gradient-to-r from-emerald-400 to-blue-500 text-transparent bg-clip-text">Studify AI</span>}
         </div>
 
-        <nav className="flex-1 py-6 px-3 space-y-2">
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`w-full flex items-center px-3 py-3 rounded-lg transition-colors ${activeTab === 'dashboard' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
-          >
-            <LayoutDashboard size={20} />
-            {isSidebarOpen && <span className="ml-3 font-medium">總覽儀表板</span>}
-          </button>
+        <nav className="flex-1 py-6 px-4 space-y-2 overflow-y-auto">
+          {/* Menu Items */}
+          {['dashboard', 'analysis', 'settings'].map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`w-full flex items-center px-4 py-3 rounded-xl transition-all duration-200 group ${activeTab === tab ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+            >
+              {tab === 'dashboard' && <LayoutDashboard size={20} />}
+              {tab === 'analysis' && <TrendingUp size={20} />}
+              {tab === 'settings' && <FileSpreadsheet size={20} />}
+              {isSidebarOpen && <span className="ml-3 font-medium capitalize">{tab}</span>}
+              {activeTab === tab && isSidebarOpen && <ChevronRight className="ml-auto opacity-50" size={16} />}
+            </button>
+          ))}
 
-          <button
-             onClick={() => setActiveTab('students')}
-             className={`w-full flex items-center px-3 py-3 rounded-lg transition-colors ${activeTab === 'students' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
-          >
-            <Users size={20} />
-            {isSidebarOpen && <span className="ml-3 font-medium">學生預警名單</span>}
-          </button>
+          {/* Interactive Filters (類似 Streamlit 的側邊欄) */}
+          {isSidebarOpen && (
+            <div className="mt-8 pt-6 border-t border-slate-700">
+              <div className="flex items-center gap-2 mb-4 text-emerald-400 px-2">
+                <Filter size={16} />
+                <span className="text-xs font-bold uppercase tracking-wider">數據篩選器</span>
+              </div>
 
-          <button
-             onClick={() => setActiveTab('analysis')}
-             className={`w-full flex items-center px-3 py-3 rounded-lg transition-colors ${activeTab === 'analysis' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
-          >
-            <BarChart3 size={20} />
-            {isSidebarOpen && <span className="ml-3 font-medium">深度數據分析</span>}
-          </button>
+              <div className="space-y-4 px-2">
+                <div>
+                  <label className="text-xs text-slate-400 mb-1.5 block">選擇學校</label>
+                  <select
+                    value={selectedSchool}
+                    onChange={(e) => setSelectedSchool(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none text-white"
+                  >
+                    {schools.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 mb-1.5 block">選擇科目</label>
+                  <select
+                    value={selectedSubject}
+                    onChange={(e) => setSelectedSubject(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none text-white"
+                  >
+                    {subjects.map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* CSV Upload in Sidebar */}
+              <div className="mt-8 px-2">
+                 <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-slate-700 border-dashed rounded-xl cursor-pointer bg-slate-800/50 hover:bg-slate-800 hover:border-emerald-500 transition-all group">
+                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                        <UploadCloud className="w-8 h-8 text-slate-500 group-hover:text-emerald-400 mb-2 transition-colors" />
+                        <p className="text-xs text-slate-400 text-center"><span className="font-semibold text-emerald-500">點擊上傳</span> CSV 檔案</p>
+                    </div>
+                    <input type="file" accept=".csv" className="hidden" onChange={handleFileUpload} />
+                </label>
+                {isUsingMock && <p className="text-[10px] text-slate-500 mt-2 text-center">* 目前顯示範例資料</p>}
+              </div>
+            </div>
+          )}
         </nav>
 
         <div className="p-4 border-t border-slate-800">
           <button
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="w-full flex justify-center p-2 rounded-lg hover:bg-slate-800 text-slate-400"
+            className="w-full flex justify-center p-2 rounded-lg hover:bg-slate-800 text-slate-400 transition-colors"
           >
-            <ChevronRight className={isSidebarOpen ? "rotate-180" : ""} />
+            <ChevronRight className={`transition-transform duration-300 ${isSidebarOpen ? "rotate-180" : ""}`} />
           </button>
         </div>
       </aside>
 
       {/* Main Content */}
-      <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? 'ml-64' : 'ml-20'}`}>
+      <main className={`flex-1 transition-all duration-300 ${isSidebarOpen ? 'ml-72' : 'ml-20'}`}>
 
         {/* Header */}
-        <header className="h-16 bg-white border-b border-slate-200 sticky top-0 z-10 px-8 flex items-center justify-between shadow-sm">
-          <div className="flex items-center text-slate-400 bg-slate-100 px-4 py-2 rounded-lg w-96">
+        <header className="h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-10 px-8 flex items-center justify-between shadow-sm">
+          <div className="flex items-center text-slate-400 bg-slate-100 px-4 py-2 rounded-full w-96 border border-transparent focus-within:border-blue-500 focus-within:bg-white transition-all">
             <Search size={18} />
             <input
               type="text"
-              placeholder="搜尋學生..."
-              className="bg-transparent border-none focus:outline-none ml-2 text-sm text-slate-800 w-full"
+              placeholder="搜尋學生、學校或是關鍵字..."
+              className="bg-transparent border-none focus:outline-none ml-2 text-sm text-slate-800 w-full placeholder:text-slate-400"
             />
           </div>
-          <div className="flex items-center gap-6">
-            {/* Share Button (New) */}
-            <button
-              onClick={() => setIsShareModalOpen(true)}
-              className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors text-sm font-medium"
-            >
-              <Share2 size={16} />
-              分享報告
-            </button>
-
-            <button className="relative text-slate-500 hover:text-slate-700">
-              <Bell size={20} />
-              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>
-            </button>
-            <div className="flex items-center gap-3 pl-6 border-l border-slate-200">
-              <div className="text-right hidden md:block">
-                <div className="text-sm font-bold text-slate-800">Demo User</div>
-                <div className="text-xs text-slate-500">Studify Admin</div>
-              </div>
-              <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 font-bold border border-blue-200">
-                S
-              </div>
-            </div>
+          <div className="flex items-center gap-4">
+             <div className="hidden md:flex flex-col items-end mr-2">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">DATA SOURCE</span>
+                <span className={`text-xs font-bold ${isUsingMock ? 'text-amber-500' : 'text-emerald-600'}`}>
+                  {isUsingMock ? 'MOCK DATA' : 'UPLOADED CSV'}
+                </span>
+             </div>
+             <button className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors relative">
+                <Bell size={20} />
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border border-white"></span>
+             </button>
+             <div className="w-9 h-9 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-full flex items-center justify-center text-white font-bold shadow-lg shadow-blue-200">
+                A
+             </div>
           </div>
         </header>
 
-        {/* Page Content */}
-        <div className="p-8 max-w-7xl mx-auto">
-          <div className="mb-8">
-            <h1 className="text-2xl font-bold text-slate-800">
-              {activeTab === 'dashboard' && '南區數位學習監測總覽'}
-              {activeTab === 'students' && '高風險學生介入清單'}
-              {activeTab === 'analysis' && '相關性與行為分析'}
-            </h1>
-            <p className="text-slate-500 mt-1">
-              {activeTab === 'dashboard' && '即時分析 4,865 位學生的數位學習行為與成效預測。'}
-              {activeTab === 'students' && '系統基於 XGBoost 模型自動標記需關注的學生，請老師優先輔導。'}
-              {activeTab === 'analysis' && '檢視各項行為指標與學習成效之間的統計關聯。'}
-            </p>
+        {/* Dynamic Content */}
+        <div className="p-8 max-w-[1600px] mx-auto space-y-8">
+
+          {/* Header Title */}
+          <div className="flex justify-between items-end">
+            <div>
+              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">數位學習成效分析</h1>
+              <p className="text-slate-500 mt-2 flex items-center gap-2">
+                <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold">113學年度</span>
+                目前顯示範圍：{selectedSchool === 'All' ? '所有學校' : selectedSchool} / {selectedSubject === 'All' ? '所有科目' : selectedSubject}
+              </p>
+            </div>
+            <button className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 font-medium shadow-sm transition-all">
+               <Download size={18} />
+               匯出報告
+            </button>
           </div>
 
-          {renderContent()}
+          {/* KPI Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <StatCard
+              title="篩選後學生總數"
+              value={kpi.totalStudents.toLocaleString()}
+              subtext="Students"
+              icon={Users}
+              colorClass="bg-blue-50 text-blue-600"
+            />
+            <StatCard
+              title="平均進步分數"
+              value={`+${kpi.avgImprovement}`}
+              subtext="Points"
+              icon={TrendingUp}
+              colorClass="bg-emerald-50 text-emerald-600"
+            />
+            <StatCard
+              title="平均使用分鐘"
+              value={`${kpi.avgUsageTime} min`}
+              subtext="Duration"
+              icon={FileSpreadsheet}
+              colorClass="bg-violet-50 text-violet-600"
+            />
+            <StatCard
+              title="學習退步警示"
+              value={kpi.highRiskCount}
+              subtext="Needs Help"
+              icon={AlertTriangle}
+              colorClass="bg-rose-50 text-rose-600"
+            />
+          </div>
+
+          {/* Main Chart Area */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 h-[500px]">
+
+            {/* Left: Bar Chart */}
+            <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col">
+              <div className="mb-6 flex justify-between items-center">
+                 <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                   <BarChart3 className="text-blue-500" size={20} />
+                   各校平均進步幅度比較
+                 </h3>
+              </div>
+              <div className="flex-1 min-h-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData.bar}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="name" tick={{fill: '#64748b', fontSize: 12}} axisLine={false} tickLine={false} />
+                    <YAxis tick={{fill: '#64748b', fontSize: 12}} axisLine={false} tickLine={false} />
+                    <Tooltip
+                      cursor={{fill: '#f8fafc'}}
+                      contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}}
+                    />
+                    <Bar dataKey="平均進步" fill="#3b82f6" radius={[6, 6, 0, 0]} barSize={40} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Right: Scatter Chart (Streamlit Style) */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col">
+              <div className="mb-2">
+                 <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                   <BrainCircuit className="text-violet-500" size={20} />
+                   使用時間 vs 成績變化
+                 </h3>
+                 <p className="text-xs text-slate-400 mt-1">分析：投入時間是否正向影響成績？</p>
+              </div>
+              <div className="flex-1 min-h-0 relative">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis type="number" dataKey="x" name="使用分鐘" unit="min" tick={{fontSize: 10}} />
+                    <YAxis type="number" dataKey="y" name="進步分數" unit="分" tick={{fontSize: 10}} />
+                    <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{borderRadius: '8px'}} />
+                    <Scatter name="學生" data={chartData.scatter} fill="#8b5cf6" fillOpacity={0.6} />
+                  </ScatterChart>
+                </ResponsiveContainer>
+
+                {/* 浮動的 Insight Card */}
+                <div className="absolute bottom-4 right-4 bg-white/90 backdrop-blur border border-slate-200 p-3 rounded-lg shadow-lg max-w-[200px]">
+                   <p className="text-xs text-slate-600 leading-relaxed">
+                     <span className="font-bold text-violet-600">AI 發現：</span>
+                     數據顯示，當使用時間超過 60 分鐘後，成績提升幅度趨緩 (邊際效應遞減)。
+                   </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom List Area */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-xl shadow-slate-200/50 overflow-hidden">
+             <div className="p-6 border-b border-slate-50 flex justify-between items-center">
+                <h3 className="text-lg font-bold text-slate-800">詳細學生數據列表</h3>
+                <span className="text-xs font-mono text-slate-400 bg-slate-50 px-2 py-1 rounded">
+                   顯示前 10 筆 / 共 {filteredData.length} 筆
+                </span>
+             </div>
+             <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                   <thead className="bg-slate-50 text-slate-500 font-medium">
+                      <tr>
+                         <th className="px-6 py-4">學校</th>
+                         <th className="px-6 py-4">姓名/代號</th>
+                         <th className="px-6 py-4">科目</th>
+                         <th className="px-6 py-4 text-right">前測</th>
+                         <th className="px-6 py-4 text-right">後測</th>
+                         <th className="px-6 py-4 text-right">進步</th>
+                         <th className="px-6 py-4 text-right">使用時數</th>
+                      </tr>
+                   </thead>
+                   <tbody className="divide-y divide-slate-50">
+                      {filteredData.slice(0, 10).map((d, i) => (
+                         <tr key={i} className="hover:bg-slate-50/80 transition-colors group">
+                            <td className="px-6 py-4 font-medium text-slate-700">{d.學校名稱}</td>
+                            <td className="px-6 py-4 text-slate-500">{d.姓名}</td>
+                            <td className="px-6 py-4">
+                               <span className="px-2 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600 group-hover:bg-white group-hover:shadow-sm transition-all border border-transparent group-hover:border-slate-200">
+                                 {d.科目 || '無資料'}
+                               </span>
+                            </td>
+                            <td className="px-6 py-4 text-right text-slate-500">{d.前測成績}</td>
+                            <td className="px-6 py-4 text-right font-bold text-slate-700">{d.後測成績}</td>
+                            <td className="px-6 py-4 text-right">
+                               <span className={`${d.前後側差異 > 0 ? 'text-emerald-600' : 'text-rose-500'} font-bold`}>
+                                 {d.前後側差異 > 0 ? '+' : ''}{d.前後側差異}
+                               </span>
+                            </td>
+                            <td className="px-6 py-4 text-right text-slate-500 font-mono">{d.使用總時數}</td>
+                         </tr>
+                      ))}
+                   </tbody>
+                </table>
+             </div>
+          </div>
+
         </div>
       </main>
-
-      {/* Share Modal (New) */}
-      {isShareModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl p-6">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold text-slate-800">分享分析報告</h3>
-              <button
-                onClick={() => setIsShareModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X size={24} />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div className="bg-blue-50 p-4 rounded-xl flex items-start gap-3">
-                <div className="bg-blue-100 p-2 rounded-lg shrink-0">
-                  <Check size={20} className="text-blue-600" />
-                </div>
-                <div>
-                  <h4 className="font-bold text-blue-900 text-sm">公開連結已生成</h4>
-                  <p className="text-blue-700 text-xs mt-1">
-                    此連結包含目前的熱力圖與風險名單，效期為 7 天。任何擁有連結的人皆可檢視。
-                  </p>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">公開連結 URL</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value="https://studify.edu.tw/share/report/v8x9-2m4k-analysis"
-                    className="flex-1 bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 font-mono focus:outline-none"
-                  />
-                  <button
-                    onClick={handleCopyLink}
-                    className={`px-4 py-2 rounded-lg font-medium text-sm transition-all flex items-center gap-2 ${isCopied ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white hover:bg-slate-800'}`}
-                  >
-                    {isCopied ? <Check size={16} /> : <Copy size={16} />}
-                    {isCopied ? '已複製' : '複製'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-8 flex justify-end">
-              <button
-                onClick={() => setIsShareModalOpen(false)}
-                className="text-slate-500 hover:text-slate-800 font-medium text-sm"
-              >
-                關閉視窗
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
