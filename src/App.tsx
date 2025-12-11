@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
-import jsPDF from 'jspdf';
+import { jsPDF } from 'jspdf';
 import {
   LayoutDashboard,
   Users,
@@ -21,7 +21,7 @@ import {
   Trash2,
   Info,
   Loader2,
-  Tag // 新增 Tag 圖示
+  Tag
 } from 'lucide-react';
 import {
   BarChart,
@@ -49,7 +49,7 @@ interface StudentData {
   練習題測驗: number;
   前後側差異: number;
   姓名?: string;
-  tag?: StudentTag; // 新增標籤欄位
+  tag?: StudentTag;
 }
 
 // --- 輔助函數 ---
@@ -66,17 +66,16 @@ const parseTime = (val: any) => {
   return 0;
 };
 
-// --- AI 標籤演算法 (核心邏輯) ---
+// --- AI 標籤演算法 ---
 const getSmartTag = (pre: number, post: number, minutes: number): StudentTag => {
   const improvement = post - pre;
-
-  if (post < 60) return '需關懷'; // 不及格優先標記
-  if (minutes > 60 && improvement <= 0) return '無效學習'; // 時間長卻沒進步
-  if (minutes < 30 && improvement >= 10) return '潛力股'; // 時間短但進步快
+  if (post < 60) return '需關懷';
+  if (minutes > 60 && improvement <= 0) return '無效學習';
+  if (minutes < 30 && improvement >= 10) return '潛力股';
   return '穩定';
 };
 
-// 標籤顏色設定
+// 標籤顏色
 const TAG_STYLES = {
   '無效學習': 'bg-rose-100 text-rose-700 border-rose-200',
   '潛力股': 'bg-emerald-100 text-emerald-700 border-emerald-200',
@@ -109,15 +108,15 @@ const processImportedData = (jsonData: any[]): StudentData[] => {
         任務完成: parseInt(row['任務完成'] || '0'),
         練習題測驗: parseInt(row['練習題測驗'] || '0'),
         姓名: row['實施教師姓名'] ? `學生(${row['實施教師姓名']}班)` : row['姓名'] ? row['姓名'] : '學生',
-        tag: getSmartTag(pre, post, minutes) // 自動打標籤
+        tag: getSmartTag(pre, post, minutes)
       };
     });
 };
 
 // 預設範例資料
 const MOCK_DATA: StudentData[] = Array.from({ length: 100 }, (_, i) => {
-  const pre = Math.floor(Math.random() * 40) + 40; // 40-80
-  const post = Math.min(100, pre + Math.floor(Math.random() * 40) - 10); // -10 到 +30
+  const pre = Math.floor(Math.random() * 40) + 40;
+  const post = Math.min(100, pre + Math.floor(Math.random() * 40) - 10);
   const hours = Math.floor(Math.random() * 2);
   const mins = Math.floor(Math.random() * 60);
   const timeStr = `${hours}:${mins}:00`;
@@ -138,8 +137,6 @@ const MOCK_DATA: StudentData[] = Array.from({ length: 100 }, (_, i) => {
   };
 });
 
-// --- 組件 ---
-
 const StatCard = ({ title, value, subtext, icon: Icon, colorClass }: any) => (
   <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-all duration-300">
     <div className="flex justify-between items-start">
@@ -159,8 +156,6 @@ const StatCard = ({ title, value, subtext, icon: Icon, colorClass }: any) => (
   </div>
 );
 
-// --- 主程式 ---
-
 export default function StudifyPlatform() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -172,7 +167,6 @@ export default function StudifyPlatform() {
   const [selectedSchool, setSelectedSchool] = useState<string>('All');
   const [selectedSubject, setSelectedSubject] = useState<string>('All');
 
-  // --- 資料處理邏輯 ---
   const schools = useMemo(() => ['All', ...new Set(rawData.map(d => d.學校名稱))], [rawData]);
   const subjects = useMemo(() => ['All', ...new Set(rawData.map(d => d.科目 || '數學'))], [rawData]);
 
@@ -189,7 +183,6 @@ export default function StudifyPlatform() {
     const totalStudents = filteredData.length;
     const avgImprovement = filteredData.reduce((acc, cur) => acc + (cur.後測成績 - cur.前測成績), 0) / (totalStudents || 1);
 
-    // 計算各種標籤的人數
     const potentialCount = filteredData.filter(d => d.tag === '潛力股').length;
     const ineffectiveCount = filteredData.filter(d => d.tag === '無效學習').length;
     const attentionCount = filteredData.filter(d => d.tag === '需關懷').length;
@@ -210,7 +203,7 @@ export default function StudifyPlatform() {
       z: d.後測成績,
       name: d.姓名 || `S${i}`,
       school: d.學校名稱,
-      tag: d.tag // 傳入 tag 以便將來擴充圖表顏色
+      tag: d.tag
     })).slice(0, 100);
 
     const schoolImprovement: Record<string, { total: number, count: number }> = {};
@@ -246,7 +239,8 @@ export default function StudifyPlatform() {
       pdf.addImage(imgData, 'PNG', 0, 30, pdfWidth, imgHeight);
       pdf.save(`Studify_Report.pdf`);
     } catch (error) {
-      alert('匯出失敗');
+      console.error(error);
+      alert('匯出失敗，請檢查 console 錯誤訊息');
     } finally {
       setIsExporting(false);
     }
@@ -404,9 +398,10 @@ export default function StudifyPlatform() {
                   AI 分群規則說明
                 </h4>
                 <ul className="text-sm text-blue-700 space-y-1 list-disc list-inside">
-                  <li><span className="font-bold">無效學習</span>：使用 > 60 分鐘且進步分數 ≤ 0</li>
-                  <li><span className="font-bold">潛力股</span>：使用 < 30 分鐘且進步分數 ≥ 10</li>
-                  <li><span className="font-bold">需關懷</span>：後測成績 < 60 分</li>
+                  {/* 這裡修正了使用 > 和 < 的錯誤，改用 &gt; 和 &lt; */}
+                  <li><span className="font-bold">無效學習</span>：使用 &gt; 60 分鐘且進步分數 ≤ 0</li>
+                  <li><span className="font-bold">潛力股</span>：使用 &lt; 30 分鐘且進步分數 ≥ 10</li>
+                  <li><span className="font-bold">需關懷</span>：後測成績 &lt; 60 分</li>
                   <li><span className="font-bold">穩定發展</span>：其他情況</li>
                 </ul>
               </div>
